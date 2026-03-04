@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>VoiceScroll</title>
+<style>
+  :root{--bg:#0f0f0f;--c:#181818;--g:#22c55e;--t:#f1f1f1;--m:#888;--b:#333}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{width:300px;background:var(--bg);color:var(--t);font-family:system-ui,sans-serif;padding:15px;overflow-x:hidden}
+  header{display:flex;align-items:center;gap:10px;margin-bottom:15px}
+  h1{font-size:16px;font-weight:700} .s{font-size:11px;color:var(--m)}
+  #btn{width:100%;padding:12px;border-radius:8px;border:1px solid var(--b);background:var(--c);color:var(--t);font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all .2s}
+  #btn.on{background:rgba(34,197,94,.15);border-color:var(--g);box-shadow:0 0 10px rgba(34,197,94,.2)}
+  .d{width:8px;height:8px;border-radius:50%;background:var(--m);transition:.2s}
+  #btn.on .d{background:var(--g)}
+  .sr{text-align:center;font-size:11px;color:var(--m);margin:10px 0 15px;font-weight:600}
+
+  /* Settings Accordion */
+  details{background:var(--c);border:1px solid var(--b);border-radius:8px;padding:2px 10px;margin-bottom:10px}
+  summary{font-size:12px;font-weight:700;padding:10px 0;cursor:pointer;outline:none;user-select:none}
+  summary::-webkit-details-marker{display:none}
+  .grp{padding-bottom:10px;border-bottom:1px solid var(--b);margin-bottom:10px}
+  .grp:last-child{border:0;margin:0;padding-bottom:10px}
+  .lbl{font-size:11px;color:var(--m);margin-bottom:4px;display:block}
+
+  input[type="text"]{width:100%;background:#000;color:#fff;border:1px solid var(--b);padding:6px 8px;border-radius:4px;font-size:12px;font-family:monospace}
+  input[type="range"]{width:100%;accent-color:var(--g);cursor:pointer}
+  .row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .row span{font-size:12px}
+  .val{font-size:11px;color:var(--g);font-weight:700;font-family:monospace}
+
+  /* Toggle Switch */
+  .sw{position:relative;display:inline-block;width:32px;height:18px}
+  .sw input{opacity:0;width:0;height:0}
+  .sl{position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background-color:var(--b);transition:.2s;border-radius:18px}
+  .sl:before{position:absolute;content:"";height:12px;width:12px;left:3px;bottom:3px;background-color:#fff;transition:.2s;border-radius:50%}
+  input:checked + .sl{background-color:var(--g)}
+  input:checked + .sl:before{transform:translateX(14px)}
+</style></head>
+<body>
+<header><span style="font-size:22px">🎤</span>
+  <div><h1>VoiceScroll Ultimate</h1><div class="s">Fully customizable</div></div>
+</header>
+<button id="btn"><span class="d"></span><span id="bt">Enable Microphone</span></button>
+<div class="sr" id="pill">● Inactive</div>
+
+<details>
+  <summary>⚙️ SCROLL PHYSICS</summary>
+  <div class="grp">
+    <div class="row">
+      <span>Scroll Distance</span>
+      <span class="val" id="dVal">300px</span>
+    </div>
+    <input type="range" id="cDist" min="100" max="800" step="50">
+  </div>
+  <div class="grp row">
+    <span>Smooth Animation</span>
+    <label class="sw"><input type="checkbox" id="cSmooth"><span class="sl"></span></label>
+  </div>
+</details>
+
+<details>
+  <summary>🗣️ CUSTOM COMMANDS</summary>
+  <div class="grp">
+    <span class="lbl">Pause Listening (Sleep)</span>
+    <input type="text" id="cSleep" placeholder="e.g. sleep, pause">
+  </div>
+  <div class="grp">
+    <span class="lbl">Resume Listening (Wake)</span>
+    <input type="text" id="cWake" placeholder="e.g. wake up, resume">
+  </div>
+  <div class="grp">
+    <span class="lbl">Scroll Down</span>
+    <input type="text" id="cDn">
+  </div>
+  <div class="grp">
+    <span class="lbl">Scroll Up</span>
+    <input type="text" id="cUp">
+  </div>
+  <div class="grp">
+    <span class="lbl">Page Down</span>
+    <input type="text" id="cPd">
+  </div>
+  <div class="grp">
+    <span class="lbl">Page Up</span>
+    <input type="text" id="cPu">
+  </div>
+  <div style="font-size:9px;color:var(--m);line-height:1.4">
+    * Separate multiple words with commas (e.g. <code>down, drop, low</code>).
+  </div>
+</details>
+
+<script src="popup.js"></script>
+</body></html>
