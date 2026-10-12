@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "VoiceScroll Ultimate",
-  "version": "22.0.0",
-  "description": "Complete product: Custom commands, sleep mode, adjustable scroll physics, and visual UI.",
+  "version": "25.0.0",
+  "description": "Pin-accurate hands-free voice scrolling for webpages and PDFs. Fuzzy matching, quantifiers, precision glide, auto-scroll.",
   "permissions": [
     "activeTab",
     "tabs",
@@ -24,7 +24,8 @@
         "content.js"
       ],
       "run_at": "document_idle",
-      "world": "MAIN"
+      "all_frames": true,
+      "match_about_blank": true
     }
   ],
   "action": {
@@ -40,7 +41,7 @@
       "suggested_key": {
         "default": "Alt+Shift+V"
       },
-      "description": "Toggle VoiceScroll"
+      "description": "Toggle VoiceScroll listening"
     }
   },
   "icons": {
