@@ -608,7 +608,6 @@
     if (isTop) showHud(autoDir > 0 ? 'Auto-scroll down' : 'Auto-scroll up', 'success', 'say "stop" · "faster" · "slower"');
   }
 
-  var autoStall = 0;
   function autoTick() {
     var t = resolveTarget();
     if (t.isPdf) {
@@ -1232,6 +1231,10 @@
       chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
         try {
           if (!msg || typeof msg !== 'object') return false;
+          if (msg.cmd === 'VS_PING') {
+            sendResponse({ pong: true });
+            return true;
+          }
           // In subframes, only respond if message is explicitly addressed to subframe or top doesn't respond
           if (!isTop && (msg.cmd === 'VS_TOGGLE' || msg.cmd === 'VS_STATUS')) {
             return false;
@@ -1275,6 +1278,16 @@
               cancelAnim();
               playEarcon('stop');
               if (isTop) showHud(wasAuto ? 'Auto-scroll stopped' : 'Stopped', wasAuto ? 'success' : 'idle', '');
+            } else if (msg.partial && typeof msg.mult === 'number' && isFinite(msg.mult) && msg.mult > 0) {
+              // Incremental remainder from the voice hub (interim "down" already
+              // executed, later "down three" arrived): apply only the difference.
+              lastCmdTime = Date.now();
+              lastMatched = msg.name;
+              playEarcon('cmd');
+              doScroll(msg.name, msg.mult, null, !!msg.page);
+              var pl = { dn: 'Down ×' + msg.mult, up: 'Up ×' + msg.mult,
+                         pd: 'Page down', pu: 'Page up', top: 'Top', bot: 'Bottom' };
+              if (isTop) showHud(pl[msg.name] || msg.name, 'success', '');
             } else {
               var raw = String(msg.raw || '');
               handleCommand(msg.name, raw, 0);

@@ -27,6 +27,14 @@ var VSCore = (function () {
     couple: 2, few: 3, several: 3
   };
 
+  // Common English words that one-substitution fuzzy matching would otherwise
+  // turn into commands (wait->wake, step->stop, half->halt, stops->stop,
+  // fast->faster, slowly->slower, button->bottom). They only match exactly.
+  var EXACT_ONLY = {
+    wait: 1, woke: 1, wave: 1, wade: 1, wage: 1, step: 1, stops: 1,
+    half: 1, fast: 1, slowly: 1, button: 1
+  };
+
   var CMD_ORDER = ['sleep', 'wake', 'stop', 'faster', 'slower', 'pd', 'pu', 'top', 'bot', 'dn', 'up'];
 
   function normalize(s) {
@@ -70,16 +78,19 @@ var VSCore = (function () {
       // Short words (length <= 3, e.g. "top", "up") require exact match to prevent false collisions
       if (phraseWord.length <= 3 || heardWord.length <= 3) return false;
 
+      // Common words never fuzzy-match (e.g. "wait" must not become "wake").
+      if (EXACT_ONLY[heardWord]) return false;
+
       var d = lev(phraseWord, heardWord);
       if (sensitivity === 'lenient') {
         return phraseWord.length <= 5 ? d <= 1 : d <= 2;
       }
 
-      // Balanced mode:
-      if (phraseWord.length <= 5) {
-        return d <= 1 && phraseWord.slice(0, 2) === heardWord.slice(0, 2);
-      }
-      return d <= 2 && phraseWord.slice(0, 2) === heardWord.slice(0, 2);
+      // Balanced mode: a single substitution, identical length, first two
+      // letters shared. Forgiving of real mishearings while preventing common
+      // collisions like stops->stop, fast->faster and slowly->slower.
+      return d <= 1 && phraseWord.length === heardWord.length &&
+        phraseWord.slice(0, 2) === heardWord.slice(0, 2);
     }
 
     // All words of phrase must appear in order, allowing up to 3 filler words

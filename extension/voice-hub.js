@@ -125,17 +125,22 @@
     } catch (e) {}
   }
 
-  function exec(name, raw, dir, tick) {
+  function exec(name, raw, dir, tick, overrideMult, overridePage) {
     var now = Date.now();
-    var mult = 1;
+    var mult = 1, page = false;
     try {
       if (matcher && (name === 'dn' || name === 'up' || name === 'pd' || name === 'pu')) {
-        mult = (matcher.parseModifier(raw, name) || { mult: 1 }).mult || 1;
+        var md = matcher.parseModifier(raw, name) || { mult: 1 };
+        mult = (typeof md.mult === 'number') ? md.mult : 1; // keep 0 ("all the way down/up")
+        page = !!md.page;
       }
     } catch (e) {}
+    var partial = (typeof overrideMult === 'number' && isFinite(overrideMult));
+    if (partial) { mult = overrideMult; page = !!overridePage; }
     try {
       var p = chrome.runtime.sendMessage({
-        cmd: 'VS_HUB_CMD', name: name, raw: raw || '', mult: mult, dir: dir || 0, tick: !!tick
+        cmd: 'VS_HUB_CMD', name: name, raw: raw || '', mult: mult, page: page,
+        partial: partial, dir: dir || 0, tick: !!tick
       });
       if (p && typeof p.catch === 'function') p.catch(function () {});
     } catch (e) {}
@@ -175,36 +180,52 @@
     lastHeard = raw;
     lastMatched = cmd + '|';
     lastCmdTime = now;
-    exec(cmd, raw, 0, false);
 
     if (sleeping) {
       if (cmd === 'wake') {
         sleeping = false;
+        exec(cmd, raw, 0, false); // wake the content engine too on web tabs
         setStatus('Listening', 'resumed — say "down" · "up"');
       } else setStatus('Paused', 'paused — say "wake up"');
-      return;
+      return; // never forward commands while paused (PDF must not scroll either)
     }
 
     if (cmd === 'sleep') {
       sleeping = true;
       stopAuto();
+      exec(cmd, raw, 0, false);
       setStatus('Paused', 'say "wake up" to resume');
       return;
     }
     if (cmd === 'stop') {
       stopAuto();
+      exec(cmd, raw, 0, false);
       setStatus('Stopped', 'say "down" to scroll again');
       return;
     }
     if ((cmd === 'dn' || cmd === 'up') && /\b(keep|continue|keep going|keep scrolling|start scrolling)\b/i.test(' ' + String(raw || '') + ' ')) {
+      exec(cmd, raw, 0, false); // content engine starts its own auto-scroll on web tabs
       startAuto(cmd === 'dn' ? 1 : -1);
       setStatus('Auto-scroll ' + (cmd === 'dn' ? 'down' : 'up'), 'say "stop" · "faster" · "slower"');
       return;
     }
-    if (autoTimer) {
-      setStatus('Auto-scroll ' + (autoDir > 0 ? 'down' : 'up'), 'speed ' + (parseInt(cfg.speed, 10) || 40) + '%');
+    if (cmd === 'faster' || cmd === 'slower') {
+      exec(cmd, raw, 0, false);
+      var disp = Math.max(1, Math.min(100, (parseInt(cfg.speed, 10) || 40) + (cmd === 'faster' ? 12 : -12)));
+      setStatus(autoTimer ? ('Auto-scroll ' + (autoDir > 0 ? 'down' : 'up')) : (cmd === 'faster' ? 'Faster' : 'Slower'),
+        'speed ' + disp + '%');
       return;
     }
+    if (cmd === 'wake') {
+      exec(cmd, raw, 0, false);
+      setStatus('Already listening', 'say "down" · "up"');
+      return;
+    }
+
+    // Manual scroll family: mirrors the on-page engine — any step command
+    // cancels auto-scroll first (PDF ticks keep firing until stopped).
+    stopAuto();
+    exec(cmd, raw, 0, false);
     var labels = { dn: 'Down', up: 'Up', pd: 'Page down', pu: 'Page up', top: 'Top', bot: 'Bottom' };
     setStatus(labels[cmd] || 'Command', 'speed ' + (parseInt(cfg.speed, 10) || 40) + '%');
   }
@@ -239,6 +260,7 @@
             lastHeard = best.text; lastConfidence = best.conf || 0; lastCmdTime = Date.now();
             prev.mod = nm; prev.text = best.text; prev.score = best.hit.score;
             if (nm.edge) exec(nm.edge === 'bot' ? 'bot' : 'top', best.text, 0, false);
+            else exec(best.hit.cmd, best.text, 0, false, (nm.mult || 1) - (om.mult || 1), nm.page);
             lastMatched = best.hit.cmd + '|';
             return;
           }
@@ -365,6 +387,7 @@
     rec.onerror = function (e) {
       var err = (e && e.error) || '';
       if (err === 'not-allowed' || err === 'service-not-allowed') {
+        active = false;
         manualStop = true;
         lastError = err;
         reportState(false);
@@ -394,6 +417,7 @@
           }
         } catch (eg) {}
       } else if (err === 'audio-capture') {
+        active = false;
         manualStop = true;
         lastError = err;
         reportState(false);
@@ -406,6 +430,7 @@
           restartRecognizer(220);
           return;
         }
+        active = false;
         manualStop = true;
         lastError = err;
         reportState(false);

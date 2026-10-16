@@ -348,7 +348,10 @@ async function routeHubCommand(msg) {
   var name = msg.name;
   var raw = msg.raw || '';
   var dir = msg.dir || 0;
-  var mult = msg.mult || 1;
+  // Preserve mult 0: it encodes "all the way down/up" (edge jump).
+  var mult = (typeof msg.mult === 'number' && isFinite(msg.mult) && msg.mult >= 0) ? msg.mult : 1;
+  var page = !!msg.page;
+  var partial = !!msg.partial;
   var tick = !!msg.tick;
 
   var tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -395,25 +398,21 @@ async function routeHubCommand(msg) {
       delete pdfAuto[tab.id];
     }
 
-    var pageH = 0;
+    // "all the way down/up" arrives with mult 0 -> trusted Home/End keys.
+    var upward = (name === 'up' || name === 'pu');
+    if (name === 'top' || (mult === 0 && upward)) { await pdfKey(tab.id, 'Home'); return; }
+    if (name === 'bot' || (mult === 0 && !upward && (name === 'dn' || name === 'pd'))) { await pdfKey(tab.id, 'End'); return; }
+
     var dist = 400;
     try { var cfgs = await chrome.storage.sync.get({ dist: 400 }); dist = clampNumBg(cfgs.dist, 400); } catch (e) {}
 
     var d = 0;
-    if (name === 'pd' || name === 'pu') {
-      if (!pageH) {
-        var vh = await dbgSend(tab.id, 'Runtime.evaluate', { expression: 'String(window.innerHeight||0)', returnByValue: true });
-        pageH = (vh && vh.ok && vh.value && vh.value.result ? parseInt(vh.value.result.value, 10) : 0) || 600;
-      }
-      d = (name === 'pd' ? 1 : -1) * Math.round(0.9 * pageH * (mult > 1 ? mult : 1));
+    if (name === 'pd' || name === 'pu' || page) {
+      var vh = await dbgSend(tab.id, 'Runtime.evaluate', { expression: 'String(window.innerHeight||0)', returnByValue: true });
+      var pageH = (vh && vh.ok && vh.value && vh.value.result ? parseInt(vh.value.result.value, 10) : 0) || 600;
+      d = (upward ? -1 : 1) * Math.round(0.9 * pageH * (mult || 1));
     } else if (name === 'dn' || name === 'up') {
-      d = (name === 'dn' ? 1 : -1) * Math.round(dist * (mult > 1 ? mult : 1));
-    } else if (name === 'top') {
-      await pdfKey(tab.id, 'Home');
-      return;
-    } else if (name === 'bot') {
-      await pdfKey(tab.id, 'End');
-      return;
+      d = (name === 'dn' ? 1 : -1) * Math.round(dist * (mult || 1));
     }
     if (d) await pdfWheel(tab.id, d);
     return;
@@ -422,7 +421,12 @@ async function routeHubCommand(msg) {
   if (mode === 'web') {
     try {
       var ready = await engineReady(tab.id);
-      if (ready) await chrome.tabs.sendMessage(tab.id, { cmd: 'VS_CMD', name: name, raw: raw, dir: dir });
+      if (ready) {
+        await chrome.tabs.sendMessage(tab.id, {
+          cmd: 'VS_CMD', name: name, raw: raw, dir: dir,
+          mult: mult, page: page, partial: partial
+        });
+      }
     } catch (e) {}
   }
 }
@@ -453,7 +457,7 @@ async function toggleActiveTab() {
   } catch (e) {}
 
   if (mode === 'restricted') {
-    return { on: false, mode: 'restricted' };
+    return { on: false, mode: 'restricted', reason: 'restricted' };
   }
 
   var hubIsRunning = await hubRunning();
