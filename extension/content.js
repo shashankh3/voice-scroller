@@ -1,7 +1,9 @@
-/* VoiceScroll Ultimate v24 — content script (ISOLATED world).
+/* VoiceScroll Ultimate v25.1 — content script (ISOLATED world).
  * Pin-accurate voice scrolling: zero-latency interim engine, fuzzy phonetic matching,
  * multi-alternative scoring, quantifiers, rAF precision scroller (CSS smooth-override),
- * native PDF wheel/shadow piercing, Web Audio earcons, and glassmorphic HUD.
+ * native PDF wheel/shadow piercing, Web Audio earcons, HUD, cross-frame scroll bridge
+ * and a chrome.debugger relay for embedded PDFs pages cannot script normally.
+ * Command matching lives in vs-core.js (shared with the PDF voice hub).
  */
 (function () {
   'use strict';
@@ -9,7 +11,8 @@
 
   // Only the top frame should run speech recognition and show the floating HUD.
   var isTop = (window.top === window.self);
-
+  // Subframe + page-level scroll bridge is active everywhere so the hub-driven
+  // engine (used for native PDFs) can still route commands into nested frames.
   var DEFAULTS = {
     dist: 400,
     smooth: true,
@@ -31,31 +34,8 @@
     cSlower: 'slower, slow down, speed down, go slower'
   };
 
-  var CMD_ORDER = ['sleep', 'wake', 'stop', 'faster', 'slower', 'pd', 'pu', 'top', 'bot', 'dn', 'up'];
-
-  // Curated phonetic homophone dictionary — only proven Web Speech mishearings.
-  // Common English words (button, wait, star, pop, brown…) are deliberately NOT
-  // mapped, so normal speech never triggers a scroll.
-  var HOMOPHONES = {
-    done: 'down', town: 'down', dawn: 'down', dowm: 'down', doun: 'down',
-    doon: 'down', domn: 'down',
-    app: 'up', opp: 'up', yup: 'up', sup: 'up',
-    pages: 'page', payge: 'page', paige: 'page',
-    stock: 'stop', shop: 'stop', stopp: 'stop',
-    slip: 'sleep', sleap: 'sleep', seep: 'sleep',
-    week: 'wake', weigh: 'wake', awake: 'wake', wakeup: 'wake',
-    quicker: 'faster'
-  };
-
-  var NUM_WORDS = {
-    one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
-    eight: 8, nine: 9, ten: 10,
-    once: 1, twice: 2, thrice: 3,
-    couple: 2, few: 3, several: 3
-  };
-
   var cfg = Object.assign({}, DEFAULTS);
-  var phrases = {}; // cmd -> array of word arrays
+  var matcher = null; // VSCore matcher instance rebuilt from cfg
   var rec = null;
   var active = false;
   var manualStop = false;
@@ -70,6 +50,9 @@
   var restartWindowStart = Date.now();
   var autoTimer = null;
   var autoDir = 0;
+  var autoStall = 0;
+  var activeLang = '';        // actual recognition language (falls back on Edge)
+  var langFallbackTried = false;
   var animId = 0; // rAF scroll animation handle
   var hudEl = null, hudOrb = null, hudText = null, hudSub = null,
       hudConfWrap = null, hudConfBar = null, hudTimer = null;
@@ -186,7 +169,11 @@
         cfg.dist = clampNum(parseInt(cfg.dist, 10) || 400, 50, 1000);
         cfg.speed = clampNum(parseInt(cfg.speed, 10) || 40, 1, 100);
         if (rebuild) buildMatchers();
-        if (langChanged && active) restartRecognizer(300);
+        if (langChanged) {
+          activeLang = cfg.lang || 'en-US';
+          langFallbackTried = false;
+          if (active) restartRecognizer(300);
+        }
         else if (active && cfg.showHud !== false && isTop) showHud('Settings updated', 'std', '');
         if (cfg.showHud === false) hideHud(true);
       });
@@ -198,151 +185,28 @@
     return Math.max(lo, Math.min(hi, n));
   }
 
-  /* ================= pin-accurate matching ================= */
+  /* ================= pin-accurate matching (shared via vs-core) ================= */
   function normalize(s) {
-    return String(s || '').toLowerCase()
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .replace(/\s+/g, ' ').trim();
-  }
-
-  function homophoneFix(words) {
-    return words.map(function (w) { return HOMOPHONES[w] || w; });
+    return VSCore.normalize(s);
   }
 
   function buildMatchers() {
-    phrases = {};
-    var map = {
-      dn: cfg.cDn, up: cfg.cUp, pd: cfg.cPd, pu: cfg.cPu,
-      top: cfg.cTop, bot: cfg.cBot, stop: cfg.cStop,
-      sleep: cfg.cSleep, wake: cfg.cWake,
-      faster: cfg.cFaster, slower: cfg.cSlower
-    };
-    for (var k in map) {
-      var list = String(map[k] || '').split(',')
-        .map(function (s) { return homophoneFix(normalize(s).split(' ').filter(Boolean)); })
-        .filter(function (a) { return a.length; });
-      list.sort(function (a, b) { return b.length - a.length; }); // longer phrases first
-      phrases[k] = list;
-    }
+    try {
+      matcher = VSCore.createMatcher(cfg);
+    } catch (e) { matcher = null; }
   }
 
-  function lev(a, b) {
-    if (a === b) return 0;
-    var la = a.length, lb = b.length;
-    if (!la) return lb; if (!lb) return la;
-    if (Math.abs(la - lb) > 3) return 99;
-    var prev = [], cur = [], i, j;
-    for (i = 0; i <= lb; i++) prev[i] = i;
-    for (i = 1; i <= la; i++) {
-      cur[0] = i;
-      for (j = 1; j <= lb; j++) {
-        var cost = a.charAt(i - 1) === b.charAt(j - 1) ? 0 : 1;
-        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
-      }
-      var t = prev; prev = cur; cur = t;
-    }
-    return prev[lb];
-  }
-
-  function wordMatch(phraseWord, heardWord) {
-    if (phraseWord === heardWord) return true;
-    if (cfg.sensitivity === 'strict') return false;
-
-    // First letter must match (phonetic homophones already handle variants like done->down, app->up)
-    if (phraseWord.charAt(0) !== heardWord.charAt(0)) return false;
-
-    // Short words (length <= 3, e.g. "top", "up") require exact match to prevent false collisions
-    if (phraseWord.length <= 3 || heardWord.length <= 3) return false;
-
-    var d = lev(phraseWord, heardWord);
-    if (cfg.sensitivity === 'lenient') {
-      return phraseWord.length <= 5 ? d <= 1 : d <= 2;
-    }
-
-    // Balanced mode:
-    if (phraseWord.length <= 5) {
-      return d <= 1 && phraseWord.slice(0, 2) === heardWord.slice(0, 2);
-    }
-    return d <= 2 && phraseWord.slice(0, 2) === heardWord.slice(0, 2);
-  }
-
-  // All words of phrase must appear in order, allowing up to 3 filler words
-  // between phrase tokens so natural speech ("please scroll a little bit down") still matches.
-  function phraseInTranscript(phraseWords, heardWords) {
-    var hi = 0;
-    var lastHi = -1;
-    for (var pi = 0; pi < phraseWords.length; pi++) {
-      var found = false;
-      while (hi < heardWords.length) {
-        if (wordMatch(phraseWords[pi], heardWords[hi])) {
-          // If not the first word of phrase, ensure the gap is bounded (<= 3 filler words)
-          if (lastHi >= 0 && (hi - lastHi) > 4) {
-            return false;
-          }
-          found = true;
-          lastHi = hi;
-          hi++;
-          break;
-        }
-        hi++;
-      }
-      if (!found) return false;
-    }
-    return true;
-  }
-
-  // Evaluates transcript against all commands; longest matching phrase wins, ties broken by CMD_ORDER priority.
   function parseCommand(raw) {
-    var heard = homophoneFix(normalize(raw).split(' ').filter(Boolean));
-    if (!heard.length) return null;
-
-    var bestCmd = null;
-    var bestScore = 0;
-
-    for (var oi = 0; oi < CMD_ORDER.length; oi++) {
-      var cmd = CMD_ORDER[oi];
-      var list = phrases[cmd] || [];
-      for (var i = 0; i < list.length; i++) {
-        if (phraseInTranscript(list[i], heard)) {
-          if (list[i].length > bestScore) {
-            bestScore = list[i].length;
-            bestCmd = cmd;
-          }
-        }
-      }
-    }
-
-    if (bestCmd) {
-      return { cmd: bestCmd, score: bestScore, words: heard };
-    }
-    return null;
+    if (!matcher) buildMatchers();
+    try { return matcher ? matcher.parseCommand(raw) : null; }
+    catch (e) { return null; }
   }
 
-  // Modifiers: "down three" -> x3, "down a little" -> x0.35, "all the way down" -> edge.
   function parseModifier(raw, cmd) {
-    var t = ' ' + normalize(raw) + ' ';
-    var edgeDown = /all the way down|right to the bottom|to the very bottom|all down/.test(t);
-    var edgeUp = /all the way up|right to the top|to the very top|all up/.test(t);
-    if (edgeDown && (cmd === 'dn' || cmd === 'pd')) return { mult: 0, edge: 'bot' };
-    if (edgeUp && (cmd === 'up' || cmd === 'pu')) return { mult: 0, edge: 'top' };
-    if (/half(\s*a)? page|halfway/.test(t)) return { mult: 0.5, edge: null, page: true };
-
-    var m = t.match(/\b(\d+)\b/);
-    var n = 0;
-    if (m) {
-      n = parseInt(m[1], 10);
-    } else {
-      for (var w in NUM_WORDS) {
-        if (t.indexOf(' ' + w + ' ') !== -1 || t.indexOf(' ' + w + 's ') !== -1) {
-          n = NUM_WORDS[w];
-          break;
-        }
-      }
-    }
-    if (n >= 1 && n <= 10) return { mult: n, edge: null };
-    if (/little|bit|slight|gentle|slowly|tiny|touch|nudge/.test(t)) return { mult: 0.35, edge: null };
-    if (/lot|much|far|fast|big|more|chunk|huge/.test(t)) return { mult: 2.5, edge: null };
-    return { mult: 1, edge: null };
+    if (!matcher) buildMatchers();
+    try {
+      return matcher ? matcher.parseModifier(raw, cmd) : { mult: 1, edge: null };
+    } catch (e) { return { mult: 1, edge: null }; }
   }
 
   /* ================= precision scroller ================= */
@@ -382,6 +246,18 @@
         }
       }
       if (embed) return { el: embed, type: 'embed' };
+      // 3. PDF declared via <object> (same trusted-input rules as embeds)
+      var obj = document.querySelector('object[type*="pdf"], object[data*=".pdf"]');
+      if (obj && /pdf/i.test(String((obj.type || '') + ' ' + (obj.data || '') + ' ' + (obj.data || '').toLowerCase()))) {
+        return { el: obj, type: 'object' };
+      }
+      // 4. PDF loaded directly in an <iframe src="...pdf"> — the viewer inside the
+      // frame is a browser-internal page no script can reach, so scrolling goes
+      // through the background's trusted debugger wheel.
+      var fr = document.querySelector('iframe[src*=".pdf"], frame[src*=".pdf"]');
+      if (fr && /\.pdf([?#]|$)/i.test(fr.getAttribute('src') || '')) {
+        return { el: fr, type: 'iframe' };
+      }
     } catch (e) {}
     return null;
   }
@@ -506,14 +382,32 @@
     requestAnimationFrame(frame);
   }
 
-  // Native Chrome PDF scrolling handler (shadow DOM + synthetic WheelEvent)
-  function scrollPdf(pdf, delta) {
-    cancelAnim();
-    if (pdf.type === 'shadow' && pdf.el) {
-      animateOn(pdf.el, false, Math.round(delta * 1.1), null);
-      return;
-    }
-    // Synthetic wheel event onto embed/window for native Chrome PDF Viewer
+  /* ==== trusted debugger relay for embedded PDFs (fallback chain) ==== */
+  // Embedded PDFs (embed/object/iframe) render in a browser-internal OOPIF hidden
+  // behind a shadow root. Untrusted synthetic wheel events reach it only in some
+  // plugin modes — trusted debugger wheel events always do (Chrome & Edge).
+  // Primary channel = debugger wheel; on explicit unavailability we degrade to
+  // the legacy synthetic WheelEvent dispatch so nothing double-scrolls.
+  var pdffbPending = false;
+  function requestDebuggerScroll(payload, onFail) {
+    if (pdffbPending) return;
+    pdffbPending = true;
+    var settled = false;
+    var finish = function (ok) {
+      pdffbPending = false;
+      if (settled) return;
+      settled = true;
+      if (!ok && onFail) onFail();
+    };
+    try {
+      var p = chrome.runtime.sendMessage({ cmd: 'VS_PDFFB', kind: payload.kind || 'wheel', delta: payload.delta || 0, key: payload.key || '' });
+      if (p && typeof p.then === 'function') {
+        p.then(function (r) { finish(!!(r && r.ok)); }).catch(function () { finish(false); });
+      } else setTimeout(function () { finish(false); }, 400);
+    } catch (e) { finish(false); }
+  }
+
+  function syntheticPdfWheel(pdf, delta) {
     try {
       var target = pdf.el || document.body || window;
       var ev = new WheelEvent('wheel', {
@@ -526,6 +420,34 @@
       });
       target.dispatchEvent(ev);
     } catch (e) {}
+  }
+
+  // Legacy synthetic key fallback for PDF jumps (plugin / embedding cases)
+  function sendPdfPluginKey(which) {
+    try {
+      var k = which === 'top' ? 'Home' : 'End';
+      var kc = which === 'top' ? 36 : 35;
+      (t_pdf_key_el() || window).dispatchEvent(new KeyboardEvent('keydown', { key: k, code: k, keyCode: kc, which: kc, bubbles: true }));
+    } catch (e) {}
+  }
+  function t_pdf_key_el() {
+    try { return pdfElement() && pdfElement().el; } catch (e) { return null; }
+  }
+
+  // Native Chrome PDF scrolling handler (shadow DOM + debugger wheel + synthetic fallback)
+  function scrollPdf(pdf, delta) {
+    cancelAnim();
+    if (pdf.type === 'shadow' && pdf.el) {
+      animateOn(pdf.el, false, Math.round(delta * 1.1), null);
+      return;
+    }
+    if (pdf.type === 'embed' || pdf.type === 'object' || pdf.type === 'iframe') {
+      requestDebuggerScroll({ kind: 'wheel', delta: delta }, function () {
+        syntheticPdfWheel(pdf, delta);
+      });
+      return;
+    }
+    syntheticPdfWheel(pdf, delta);
   }
 
   function doScroll(cmd, mult, edge, usePage) {
@@ -567,10 +489,46 @@
             ? Math.round(inner.clientHeight * 0.9 * (mult && mult !== 1 ? mult : 1))
             : delta;
           animateOn(inner, false, amt, null);
+        } else {
+          // Page did not move and no inner scroll target was found. The content
+          // may live in a child frame (cross-origin docs, embedded viewers) or
+          // inside an embedded PDF: first offer the scroll to child frames via
+          // the postMessage bridge, then fall back to trusted debugger input.
+          crossFrameScroll(cmd, delta, mult);
         }
       }
     });
   }
+
+  /* ================= cross-frame scroll bridge ================= */
+  var bridgeSeq = 0;
+  var bridgeAcked = false;
+  function bridgePayload(delta, seq) {
+    return { __vsBridge: 'scroll', delta: delta, seq: seq };
+  }
+
+  // Ask every child frame if it can scroll. Child content scripts answer with
+  // an ack; if none moved within the settle window we escalate to debugger input.
+  function crossFrameScroll(cmd, delta, mult) {
+    var kids = 0;
+    try { kids = window.frames ? window.frames.length : 0; } catch (e) { kids = 0; }
+    if (!kids || !isTop) {
+      requestDebuggerScroll({ kind: 'wheel', delta: delta });
+      return;
+    }
+    bridgeAcked = false;
+    var seq = ++bridgeSeq;
+    var payload = bridgePayload(delta, seq);
+    try {
+      for (var i = 0; i < kids; i++) window.frames[i].postMessage(payload, '*');
+    } catch (e) {}
+    setTimeout(function () {
+      if (seq === bridgeSeq && !bridgeAcked) {
+        requestDebuggerScroll({ kind: 'wheel', delta: delta });
+      }
+    }, 160);
+  }
+
 
   function jumpTo(which, t) {
     cancelAnim();
@@ -584,12 +542,20 @@
         }
         return;
       }
-      // Send Home / End keydown to PDF plugin
-      try {
-        var k = which === 'top' ? 'Home' : 'End';
-        var kc = which === 'top' ? 36 : 35;
-        (t.pdf.el || window).dispatchEvent(new KeyboardEvent('keydown', { key: k, code: k, keyCode: kc, which: kc, bubbles: true }));
-      } catch (e) {}
+      if (t.pdf.type === 'embed' || t.pdf.type === 'object' || t.pdf.type === 'iframe') {
+        // Trusted Home / End keys into the PDF plugin via the debugger relay.
+        requestDebuggerScroll({ kind: 'key', key: which === 'top' ? 'Home' : 'End' }, function () {
+          sendPdfPluginKey(which);
+        });
+        return;
+      }
+      sendPdfPluginKey(which);
+      if (t.pdf.el) {
+        try {
+          var yPos = which === 'top' ? 0 : t.pdf.el.scrollHeight;
+          t.pdf.el.scrollTo({ top: yPos, behavior: cfg.smooth ? 'smooth' : 'instant' });
+        } catch (e) {}
+      }
       return;
     }
 
@@ -634,20 +600,62 @@
     stopAuto(true);
     autoDir = dir;
     cancelAnim();
+    autoStall = 0;
     playEarcon('cmd');
     autoTimer = setInterval(function () {
-      var t = resolveTarget();
-      if (t.isPdf) {
-        scrollPdf(t.pdf, autoDir * autoStep());
-        return;
-      }
-      if (t.el && !t.isWin) {
-        try { t.el.scrollTop += autoDir * autoStep(); } catch (e) {}
-        return;
-      }
-      try { window.scrollBy(0, autoDir * autoStep()); } catch (e) {}
+      autoTick();
     }, 45);
     if (isTop) showHud(autoDir > 0 ? 'Auto-scroll down' : 'Auto-scroll up', 'success', 'say "stop" · "faster" · "slower"');
+  }
+
+  var autoStall = 0;
+  function autoTick() {
+    var t = resolveTarget();
+    if (t.isPdf) {
+      scrollPdf(t.pdf, autoDir * autoStep());
+      return;
+    }
+    if (t.el && !t.isWin) {
+      try { t.el.scrollTop += autoDir * autoStep(); } catch (e) {}
+      return;
+    }
+    var y0 = window.scrollY || document.documentElement.scrollTop || 0;
+    try { window.scrollBy(0, autoDir * autoStep()); } catch (e) {}
+    var y1 = window.scrollY || document.documentElement.scrollTop || 0;
+    if (Math.abs(y1 - y0) < 2) {
+      // Window is not the scroller — try the inner container, then child frames,
+      // then the debugger relay so auto-scroll also works on embedded viewers.
+      autoStall++;
+      if (autoStall % 3 === 1) {
+        var inner = innerScrollTarget();
+        if (inner) { try { inner.scrollTop += autoDir * autoStep(); } catch (e) {} return; }
+      }
+      var kids = 0;
+      try { kids = window.frames ? window.frames.length : 0; } catch (e) {}
+      if (kids && isTop) {
+        // Primary: offer each child frame the scroll via the postMessage bridge.
+        var seq = ++bridgeSeq;
+        bridgeAcked = false;
+        try {
+          var payload = bridgePayload(autoDir * autoStep(), seq);
+          for (var i = 0; i < kids; i++) window.frames[i].postMessage(payload, '*');
+        } catch (e) {}
+        if (autoStall >= 6) {
+          // Secondary: if the bridge stays silent, escalate to trusted input.
+          autoStall = 3;
+          setTimeout(function () {
+            if (seq === bridgeSeq && !bridgeAcked) {
+              requestDebuggerScroll({ kind: 'wheel', delta: autoDir * autoStep() });
+            }
+          }, 160);
+        }
+      } else if (isTop && autoStall >= 3) {
+        autoStall = 0;
+        requestDebuggerScroll({ kind: 'wheel', delta: autoDir * autoStep() });
+      }
+    } else {
+      autoStall = 0;
+    }
   }
 
   function stopAuto(silent) {
@@ -685,7 +693,7 @@
   function start() {
     if (active) return;
     if (!speechCtor()) {
-      if (isTop) showHud('Voice not supported', 'err', 'use Chrome desktop');
+      if (isTop) showHud('Speech API unavailable', 'err', 'use a current Chrome or Edge');
       return;
     }
     manualStop = false;
@@ -693,18 +701,23 @@
     restartCount = 0;
     restartWindowStart = Date.now();
     executedSegments = {};
+    if (!activeLang) activeLang = cfg.lang || 'en-US';
     createAndStart();
   }
 
   function createAndStart() {
     var SR = speechCtor();
-    if (!SR) { active = false; return; }
+    if (!SR) {
+      active = false;
+      if (isTop) showHud('Speech API unavailable', 'err', 'use a current Chrome or Edge');
+      return;
+    }
     try { if (rec) { try { rec.abort(); } catch (e) {} rec = null; } } catch (e) {}
 
     rec = new SR();
     rec.continuous = true;
     rec.interimResults = true;
-    rec.lang = cfg.lang || 'en-US';
+    rec.lang = activeLang || cfg.lang || 'en-US';
     try { rec.maxAlternatives = 3; } catch (e) { try { rec.maxAlternatives = 1; } catch (e2) {} }
 
     rec.onstart = function () {
@@ -753,7 +766,22 @@
         if (isTop) showHud('No microphone', 'err', 'plug in a mic and retry');
         try { if (rec) rec.abort(); } catch (ee) {}
       } else if (err === 'language-not-supported') {
-        if (isTop) showHud('Language unsupported', 'err', String(cfg.lang || ''));
+        // Chromium-family engines (especially Edge) reject a requested language
+        // outright. Retry once with the service default (en-US) instead of
+        // spinning in a restart loop; if even that fails, stop cleanly.
+        if (!langFallbackTried && String(activeLang || cfg.lang) !== 'en-US') {
+          langFallbackTried = true;
+          activeLang = 'en-US';
+          if (isTop) showHud('Language fallback', 'err', String(cfg.lang || '') + ' not available — retrying en-US');
+          restartRecognizer(220);
+          return;
+        }
+        active = false; manualStop = true;
+        notifyState(false);
+        if (isTop) {
+          showHud('Language not available', 'err', 'this browser refuses "' + String(activeLang || cfg.lang) + '" — try Chrome desktop or change the language');
+        }
+        try { if (rec) rec.abort(); } catch (ee) {}
       }
     };
 
@@ -993,26 +1021,29 @@
     return 'heard "' + String(lastHeard).slice(0, 42) + '" · ' + Math.round(c * 100) + '%';
   }
 
-  /* ================= minimal on-page indicator (Muse theme) ================= */
+  /* ================= minimal on-page indicator (Tesla dark theme) ================= */
   var CSS = [
     '.vs-hud{position:fixed;bottom:28px;left:50%;transform:translateX(-50%) translateY(6px);',
-    'display:flex;align-items:center;gap:10px;padding:9px 16px 9px 11px;border-radius:14px;',
-    'background:#fffdf9;border:1px solid #e7e0d1;box-shadow:0 6px 24px rgba(60,50,35,.14);',
-    'color:#1f1e1c;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;z-index:2147483647;',
+    'display:flex;align-items:center;gap:10px;padding:10px 18px 10px 12px;border-radius:15px;',
+    'background:rgba(8,9,11,.78);border:1px solid rgba(255,255,255,.1);',
+    'backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);',
+    'box-shadow:0 14px 44px -10px rgba(0,0,0,.55);',
+    'color:#f4f4f2;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Roboto,sans-serif;z-index:2147483647;',
     'pointer-events:none;opacity:0;transition:opacity .2s,transform .2s;',
     'max-width:min(88vw,560px);box-sizing:border-box;line-height:normal;}',
     '.vs-hud.vs-show{opacity:1;transform:translateX(-50%) translateY(0);}',
+    '.vs-hud.vs-live{border-color:rgba(227,25,55,.38);box-shadow:0 14px 44px -10px rgba(0,0,0,.55),0 0 22px -4px rgba(227,25,55,.28);}',
     '.vs-orb{width:30px;height:30px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;',
-    'font-size:14px;background:#f1ece0;border:1px solid #e0d8c4;}',
+    'font-size:13px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);transition:background .2s,border-color .2s;}',
     '.vs-orb span{display:flex;align-items:center;justify-content:center;}',
-    '.vs-hud.vs-live .vs-orb{background:#f6e8de;border-color:#e3bda6;}',
-    '.vs-hud.vs-err .vs-orb{background:#f9e4e1;border-color:#e5b3ae;}',
-    '.vs-hud.vs-sleep .vs-orb{background:#f7ecd4;border-color:#e3cf9e;}',
+    '.vs-hud.vs-live .vs-orb{background:rgba(227,25,55,.15);border-color:rgba(227,25,55,.42);}',
+    '.vs-hud.vs-err .vs-orb{background:rgba(255,82,82,.13);border-color:rgba(255,82,82,.38);}',
+    '.vs-hud.vs-sleep .vs-orb{background:rgba(232,201,138,.12);border-color:rgba(232,201,138,.38);}',
     '.vs-main{display:flex;flex-direction:column;line-height:1.3;min-width:0;}',
-    '.vs-text{font-size:13px;font-weight:600;letter-spacing:-.1px;color:#1f1e1c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:54vw;}',
-    '.vs-sub{font-size:11px;font-weight:400;color:#76716a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:54vw;margin-top:1px;}',
-    '.vs-conf{width:56px;height:3px;border-radius:99px;background:#ece6d8;overflow:hidden;flex-shrink:0;}',
-    '.vs-conf i{display:block;height:100%;width:0;border-radius:99px;background:#c15f3c;transition:width .25s;}'
+    '.vs-text{font-size:13px;font-weight:600;letter-spacing:.01em;color:#f4f4f2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:54vw;}',
+    '.vs-sub{font-size:11px;font-weight:400;color:rgba(244,244,242,.52);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:54vw;margin-top:1px;}',
+    '.vs-conf{width:56px;height:2px;border-radius:99px;background:rgba(255,255,255,.12);overflow:hidden;flex-shrink:0;}',
+    '.vs-conf i{display:block;height:100%;width:0;border-radius:99px;background:#e31937;box-shadow:0 0 8px rgba(227,25,55,.7);transition:width .25s;}'
   ].join('');
 
   function ensureHud() {
@@ -1117,6 +1148,53 @@
     } catch (e) {}
   }
 
+  /* ================= cross-frame scroll bridge (every frame) ================= */
+  window.addEventListener('message', function (e) {
+    try {
+      var d = e.data;
+      if (!d || typeof d !== 'object' || !d.__vsBridge) return;
+      if (window !== window.top && e.source !== window.parent) return;
+      if (window === window.top && e.source === window) return;
+
+      if (d.__vsBridge === 'scroll') {
+        // Child frames: try to honor the scroll locally and report back.
+        var delta = Math.round(d.delta || 0);
+        if (!delta) return;
+        var done = crossFrameApplyScroll(delta);
+        try { e.source.postMessage({ __vsBridge: 'ack', seq: d.seq, moved: done }, '*'); } catch (err) {}
+        return;
+      }
+      if (d.__vsBridge === 'ack' && isTop) {
+        bridgeAcked = true;
+        if (d.moved && autoTimer) autoStall = 3; // let the bridge carry auto-scroll
+        return;
+      }
+    } catch (err) {}
+  });
+
+  // Best-effort local scroll inside a child frame (own window + inner container).
+  function crossFrameApplyScroll(delta) {
+    var moved = false;
+    try {
+      var pdf = isTop ? null : pdfElement();
+      if (pdf) {
+        scrollPdf(pdf, delta);
+        return true;
+      }
+      var y0 = window.scrollY || document.documentElement.scrollTop || 0;
+      try { window.scrollBy(0, delta); } catch (err) {}
+      var y1 = window.scrollY || document.documentElement.scrollTop || 0;
+      if (Math.abs(y1 - y0) >= 1) moved = true;
+      var inner = innerScrollTarget();
+      if (inner) {
+        var s0 = inner.scrollTop;
+        try { inner.scrollTop += delta; } catch (err) {}
+        if (Math.abs(inner.scrollTop - s0) >= 1) moved = true;
+      }
+    } catch (err) {}
+    return moved;
+  }
+
   /* ================= external API ================= */
   window.__vs = {
     toggle: function () {
@@ -1180,6 +1258,27 @@
           }
           if (msg.cmd === 'VS_TEST') {
             window.__vs.test(msg.what || 'dn');
+            sendResponse({ ok: true });
+            return true;
+          }
+          // Relay from the PDF voice hub via background: execute a decoded command
+          // on this tab's engine (top frame only, mirrors speech-driven path).
+          if (msg.cmd === 'VS_CMD' && isTop) {
+            if (msg.name === 'auto') {
+              if (msg.dir) startAuto(msg.dir);
+            } else if (msg.name === 'stop') {
+              lastCmdTime = Date.now();
+              lastTranscript = 'stop|';
+              lastMatched = 'stop';
+              var wasAuto = !!autoTimer;
+              stopAuto();
+              cancelAnim();
+              playEarcon('stop');
+              if (isTop) showHud(wasAuto ? 'Auto-scroll stopped' : 'Stopped', wasAuto ? 'success' : 'idle', '');
+            } else {
+              var raw = String(msg.raw || '');
+              handleCommand(msg.name, raw, 0);
+            }
             sendResponse({ ok: true });
             return true;
           }

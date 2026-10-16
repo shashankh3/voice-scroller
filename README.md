@@ -1,28 +1,45 @@
-# VoiceScroll Ultimate (v25) — Chrome extension for voice scrolling
+# VoiceScroll Ultimate (v25.1) — voice scrolling for Chrome AND Edge
 
-Hands-free scrolling for **webpages and PDFs** opened in Chrome, using the built-in
-Web Speech API (no extra server, no API key — audio is processed by Chrome's
-speech service). Click **Enable Microphone**, then speak.
+Hands-free scrolling for **any website, any native PDF, any embedded file** opened
+inside Chrome or Edge, using the built-in Web Speech API (no extra server, no API
+key — audio is processed by the browser's speech service). Click
+**Enable Microphone**, then speak.
 
 Folder: `extension/` (load this folder as an unpacked extension).
 
-## What makes execution absolutely perfect in v25
+## What's new in v25.1 — "works everywhere"
 
-- **Muse minimalist UI** — warm paper popup and on-page indicator: quiet borders,
-  one terracotta accent, no gradients or glow. Same engine, calmer look.
+- **Chrome + Edge** — same manifest, same codebase. Edge uses its own (Azure
+  backed) speech service; if it refuses your language, the engine automatically
+  retries with English (US), then stops cleanly instead of restart-looping.
+- **Native PDF mode (hub + trusted input)** — Chrome/Edge render top-level PDFs
+  on internal browser pages where content scripts cannot run. Enabling voice on
+  a PDF tab therefore starts a hidden *voice hub* (offscreen document; a tiny
+  tab fallback) and scrolling is driven from the background with **trusted
+  `chrome.debugger` wheel / Home/End events** — the only mechanism that reliably
+  moves native PDF viewers (their content sits behind a shadow-root embed in an
+  internal frame). Chrome shows a brief "started debugging" bar while this mode
+  is active; it disappears when the hub stops.
+- **Embedded PDFs on normal pages** — `<embed>` / `<object>` / `<iframe
+  src="*.pdf">` viewers are detected and scrolled through the same trusted
+  input relay (with the legacy synthetic-wheel dispatch as fallback).
+- **Cross-frame scroll bridge** — when a page's content scrolls inside a
+  cross-origin iframe (docs sites, embeds), the scroll is offered to every child
+  frame via a postMessage bridge before falling back to trusted input.
+- **file:// pages & PDFs** — .html files still honor the "Allow access to file
+  URLs" switch, but native PDF tabs no longer need it in PDF mode.
+- Kept from v25: zero-latency interim engine (210 ms settling), 0 ms
+  stop/sleep, segment deduplication, CSS smooth-behavior override,
+  phonetic matching, Muse UI, earcons, ON badge, popup tuning.
 
-- **Zero-Latency Interim Engine** — commands fire on interim speech with an intelligent 210 ms settling debounce instead of waiting 1.5–2.0 seconds in silence for Chrome's `isFinal`. Speech recognition feels instant.
-- **Immediate Emergency Halt** — `"stop"` and `"sleep"` execute with **0 ms delay**, stopping continuous scroll the exact millisecond the word is uttered.
-- **Segment Deduplication** — tracks speech segment indices to completely eliminate double-scrolls between interim and final results, while allowing rapid-fire successive commands (`"down" … "down" … "down"`).
-- **CSS `scroll-behavior: smooth` Override** — precision rAF scroller uses `behavior: 'instant'` during frame interpolation, preventing modern CSS smooth-scrolling rules from causing jitter, lag, or rubberbanding.
-- **Native Chrome PDF Support** — dual-engine PDF scroller pierces shadow DOM (`#viewerContainer`) and falls back to synthetic `WheelEvent` and keyboard dispatch on Chrome's native PDF plugin embed.
-- **Direct Inner-Container Resolution** — on single-page apps (ChatGPT, Slack, Gmail, Notion, GitHub, Reddit) where the scrollable container is an inner `<div>`, scrolling targets the active container directly without wasting 400 ms on a static `window`.
-- **Top-Frame Audio Guard** — prevents subframes (ads, widgets, analytics iframes) from competing for mic permissions, throwing errors, or spawning duplicate HUDs.
-- **Web Audio Earcons** — subtle synthetic audio chimes and blips confirm recognition without taking your eyes off the text (toggleable in popup).
-- **Toolbar Status Badge** — displays a sleek green `ON` badge on the Chrome toolbar whenever VoiceScroll is actively listening.
-- **Full `file://` Scheme Support** — background script fully allows local HTML files and local PDFs (requires enabling *Allow access to file URLs* in Chrome extension settings).
-- **Refined Phonetic Matching** — strict first-letter guard + expanded homophone library (`done → down`, `stock → stop`, `app → up`) prevents false hits like `"top"` matching `"stop"` or 2-letter words colliding.
-- **Redesigned Glassmorphic Popup** — live soundwave animations, instant Quick-Test chips, precision tuning sliders, and full command customization.
+## How the engine picks its mode
+
+| Active tab is… | Recognition runs in… | Scrolling done by… |
+|---|---|---|
+| Normal website / SPA | content.js in the page | rAF precision scroller (window, inner container, sub-frame bridge) |
+| Native PDF viewer tab | voice hub (offscreen doc, tab fallback) | `chrome.debugger` trusted wheel / keys |
+| Embedded PDF inside a page | content.js in the page | debugger relay, then synthetic wheel |
+| `chrome://`, `edge://`, store pages | — | blocked by the browser (popup explains) |
 
 ## Voice commands (defaults, all editable in popup)
 
@@ -32,41 +49,52 @@ Folder: `extension/` (load this folder as an unpacked extension).
 - **Jump:** `top`, `bottom` (or `all the way down`, `all the way up`)
 - **Auto-scroll:** `keep scrolling down` / `keep scrolling up` → `faster` / `slower` → `stop`
 - **Hands-free Pause:** `sleep` → `wake up`
-- **Shortcut:** `Alt+Shift+V` toggles listening anywhere.
+- **Shortcut:** `Alt+Shift+V` toggles listening anywhere (web and PDF tabs).
 
-## Install (Developer mode)
+## Install (Developer mode) — Chrome
 
 1. Open `chrome://extensions`, enable **Developer mode** (top-right).
-2. **Load unpacked** → open the `voice-scroller` folder → select the **`extension`**
-   folder (the one containing `manifest.json`) → **Select Folder**.
+2. **Load unpacked** → select the **`extension`** folder (the one containing
+   `manifest.json`) → **Select Folder**.
    ⚠️ Selecting the outer `voice-scroller` folder itself gives
-   “Could not load manifest” — you must pick the inner `extension` folder.
+   "Could not load manifest" — you must pick the inner `extension` folder.
 3. Pin **VoiceScroll Ultimate** to the toolbar.
 4. Open any long page (e.g. `https://en.wikipedia.org/wiki/Chrome`),
-   click the icon → **Enable Microphone** → **Allow** mic when Chrome asks.
+   click the icon → **Enable Microphone** → **Allow** mic when the browser asks.
 5. Say `down`, `up`, `page down`, `top`, `bottom`, `stop`.
+
+## Install — Microsoft Edge (Chromium)
+
+Same steps at `edge://extensions`. Notes:
+
+- Speech runs through Edge's speech service; on-device recognition (Edge 150+,
+  experimental) can be enabled in Edge settings.
+- PDFs work identically (Edge's PDF viewer is the same Chromium architecture).
+- If Edge reports a language as unsupported, either pick English (US) or update
+  Edge — the engine will not restart-loop; it stops cleanly with a message.
 
 ## PDFs
 
-- **HTTPS PDFs** (e.g. arXiv paper URL): open the PDF, enable VoiceScroll, and speak.
-- **Local `file://` PDFs:**
-  1. Open `chrome://extensions`
-  2. Click **Details** on VoiceScroll Ultimate
-  3. Toggle **Allow access to file URLs** to ON
-  4. Reload your PDF tab.
-- If a PDF downloads instead of opening in Chrome:
-  Turn OFF *Download PDFs* at `chrome://settings/content/pdfDocuments`.
+- **HTTPS PDFs** (e.g. arXiv paper): open the PDF, click **Enable** — the popup
+  switches to **PDF mode** automatically. Allow mic once (popup prompt);
+  afterwards the hub starts silently.
+- **Local `file://` PDFs:** PDF mode does not need "Allow access to file URLs".
+- **PDFs embedded in web pages** (`<embed>/<object>/<iframe>`): handled by the
+  content script + trusted-input relay automatically.
+- If a PDF downloads instead of opening:
+  `chrome://settings/content/pdfDocuments` → turn OFF *Download PDFs*.
 
 ## Troubleshooting
 
 - **"Mic blocked"** → click the 🔒/🎤 icon in the address bar → set Microphone to
   **Allow** → reload → Enable again. Mic permission is per-site.
-- **"Extensions are blocked on this page"** → Chrome forbids extensions on the
-  Web Store, `chrome://`, `edge://`, `about:` pages. Use any normal site or PDF.
+- **A thin "is debugging this browser" bar appears** → that's PDF mode: the
+  trusted input engine drives the PDF viewer. It disappears when you stop the
+  hub (or is dismissed by clicking its ✕, which disables PDF scrolling).
+- **"Extensions are blocked on this page"** → browsers forbid extensions on the
+  Web/Edge store, `chrome://`, `edge://`, `about:` pages. Use any normal site or PDF.
 - **"Could not load manifest" at install** → you selected the wrong folder.
-  Re-do **Load unpacked** and pick the inner `extension/` folder (check it
-  contains `manifest.json`). Do not load the outer `voice-scroller/` folder
-  or a `.zip` file.
+  Re-do **Load unpacked** and pick the inner `extension/` folder.
 - **"Could not start here — refresh"** → reload the tab (a tab opened before
   extension install or reload has no content script yet), then Enable.
 - **Listening stops after silence** → auto-restarts with smooth backoff; if the
@@ -76,8 +104,10 @@ Folder: `extension/` (load this folder as an unpacked extension).
 ## Verification
 
 ```powershell
+node --check extension/vs-core.js
 node --check extension/content.js
 node --check extension/background.js
+node --check extension/voice-hub.js
 node --check extension/popup.js
 python -c "import json; json.load(open('extension/manifest.json')); print('manifest OK')"
 ```

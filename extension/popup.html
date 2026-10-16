@@ -4,31 +4,26 @@
   <meta charset="UTF-8">
   <title>VoiceScroll Ultimate</title>
   <style>
-    /* Muse minimalist theme — warm paper, quiet borders, one accent. */
+    /* Tesla-inspired dark theme — true black, hairline borders, one red accent. */
     :root {
-      --bg: #f7f4ed;
-      --card: #fffdf9;
-      --card-border: #e7e0d1;
-      --text: #1f1e1c;
-      --text-muted: #76716a;
-      --text-faint: #a8a29a;
-      --accent: #c15f3c;
-      --accent-soft: #f6e8de;
-      --accent-border: #e3bda6;
-      --green: #4d7c5f;
-      --green-soft: #e9efe8;
-      --amber: #a86a12;
-      --amber-soft: #f7ecd4;
-      --red: #b3261e;
-      --red-soft: #f9e4e1;
-      --ink-btn: #201e1b;
+      --bg: #050505;
+      --panel: #0e1013;
+      --panel-2: #17191d;
+      --line: rgba(255,255,255,.08);
+      --line-strong: rgba(255,255,255,.16);
+      --text: #f4f4f2;
+      --muted: rgba(244,244,242,.52);
+      --faint: rgba(244,244,242,.34);
+      --red: #e31937;
+      --red-press: #bd0f2b;
+      --line-red: rgba(227,25,55,.45);
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       width: 340px;
-      background: var(--bg);
+      background: radial-gradient(1400px 520px at 50% -12%, rgba(255,255,255,.055), transparent 62%), var(--bg);
       color: var(--text);
-      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Roboto, sans-serif;
       padding: 18px 16px 14px;
       overflow-x: hidden;
       -webkit-font-smoothing: antialiased;
@@ -37,131 +32,150 @@
     /* Header */
     .top { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
     .logo {
-      width: 34px; height: 34px; border-radius: 10px;
-      background: var(--accent); color: #fffdf9;
+      width: 36px; height: 36px; border-radius: 9px;
+      background: var(--red); color: #fff;
       display: flex; align-items: center; justify-content: center;
-      font-size: 17px; font-weight: 400; flex-shrink: 0;
+      font-size: 17px; font-weight: 500; flex-shrink: 0;
+      box-shadow: 0 6px 18px rgba(227,25,55,.28);
     }
-    .top h1 { font-size: 15px; font-weight: 650; letter-spacing: -0.1px; }
-    .top h1 span { color: var(--accent); font-weight: 650; }
-    .sub { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+    .top h1 { font-size: 15px; font-weight: 600; letter-spacing: -.1px; }
+    .top h1 span { color: var(--text); font-weight: 300; }
+    .sub {
+      font-size: 9.5px; color: var(--muted); margin-top: 2px;
+      text-transform: uppercase; letter-spacing: .18em; font-weight: 500;
+    }
     .ver {
-      margin-left: auto; font-size: 10px; font-weight: 600; color: var(--text-muted);
-      background: transparent; border: 1px solid var(--card-border);
-      padding: 3px 9px; border-radius: 99px; white-space: nowrap;
+      margin-left: auto; font-size: 9.5px; font-weight: 600; color: var(--muted);
+      background: transparent; border: 1px solid var(--line);
+      padding: 4px 9px; border-radius: 99px; white-space: nowrap;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .04em;
     }
 
     /* Status card */
     .status {
-      background: var(--card); border: 1px solid var(--card-border);
-      border-radius: 12px; padding: 12px 14px;
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: 14px; padding: 12px 14px;
       display: flex; gap: 11px; align-items: center; margin-bottom: 12px;
+      transition: border-color .2s, box-shadow .2s;
     }
-    .status.live { border-color: var(--accent-border); }
-    .status.sleep { border-color: #e3cf9e; }
-    .status.err, .status.blocked { border-color: #e5b3ae; }
+    .status.live {
+      border-color: var(--line-red);
+      box-shadow: 0 0 0 1px rgba(227,25,55,.14), 0 10px 30px -12px rgba(227,25,55,.3);
+    }
+    .status.sleep { border-color: rgba(232,201,138,.35); }
+    .status.err, .status.blocked { border-color: rgba(255,82,82,.4); }
     .orb {
       width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
-      font-size: 17px; background: #f1ece0; border: 1px solid var(--card-border);
+      font-size: 16px; background: var(--panel-2); border: 1px solid var(--line);
+      transition: background .2s, border-color .2s;
     }
-    .status.live .orb { background: var(--accent-soft); border-color: var(--accent-border); }
-    .status.sleep .orb { background: var(--amber-soft); border-color: #e3cf9e; }
-    .status.err .orb, .status.blocked .orb { background: var(--red-soft); border-color: #e5b3ae; }
-    .st-t { font-size: 13.5px; font-weight: 650; letter-spacing: -0.1px; }
+    .status.live .orb { background: rgba(227,25,55,.15); border-color: var(--line-red); }
+    .status.sleep .orb { background: rgba(232,201,138,.12); border-color: rgba(232,201,138,.4); }
+    .status.err .orb, .status.blocked .orb { background: rgba(255,82,82,.13); border-color: rgba(255,82,82,.4); }
+    .st-t { font-size: 13.5px; font-weight: 600; letter-spacing: .01em; }
     .st-s {
-      font-size: 11.5px; color: var(--text-muted); margin-top: 1px;
+      font-size: 11.5px; color: var(--muted); margin-top: 2px;
       max-width: 215px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .conf {
-      height: 3px; border-radius: 99px; background: #ece6d8;
-      margin-top: 8px; overflow: hidden; width: 100%;
+      height: 2px; border-radius: 99px; background: rgba(255,255,255,.1);
+      margin-top: 9px; overflow: hidden; width: 100%;
     }
     .conf i {
       display: block; height: 100%; width: 0; border-radius: 99px;
-      background: var(--accent); transition: width .25s ease-out;
+      background: var(--red); transition: width .25s ease-out;
+      box-shadow: 0 0 8px rgba(227,25,55,.7);
     }
 
-    /* Primary button */
+    /* Primary button — flat white like a Tesla order button; red while live */
     #btn {
-      width: 100%; padding: 12px; border-radius: 10px; border: 1px solid var(--ink-btn);
-      cursor: pointer; background: var(--ink-btn); color: #faf8f3;
-      font-size: 13.5px; font-weight: 600; letter-spacing: 0;
+      width: 100%; padding: 13px; border-radius: 10px; border: 1px solid #ffffff;
+      cursor: pointer; background: #ffffff; color: #0a0a0a;
+      font-size: 12px; font-weight: 700; letter-spacing: .14em;
+      text-transform: uppercase;
       display: flex; align-items: center; justify-content: center; gap: 7px;
-      transition: background .15s, color .15s;
+      transition: background .15s, color .15s, box-shadow .2s;
     }
-    #btn:hover:not(:disabled) { background: #35322d; }
-    #btn:disabled { opacity: 0.55; cursor: wait; }
-    #btn.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-border); }
-    #btn.on:hover:not(:disabled) { background: #f3ddcc; }
+    #btn:hover:not(:disabled) { background: #dcdcdc; }
+    #btn:active:not(:disabled) { background: #c9c9c9; }
+    #btn:disabled { opacity: .45; cursor: wait; }
+    #btn.on {
+      background: var(--red); color: #fff; border-color: var(--red);
+      box-shadow: 0 8px 26px -8px rgba(227,25,55,.55);
+    }
+    #btn.on:hover:not(:disabled) { background: var(--red-press); }
 
     .pill {
-      text-align: center; font-size: 11px; color: var(--text-muted);
-      margin: 9px 0 11px; font-weight: 500; min-height: 15px;
+      text-align: center; font-size: 10.5px; color: var(--muted);
+      margin: 10px 0 11px; font-weight: 500; min-height: 15px;
     }
-    .pill b { color: var(--accent); }
+    .pill b { color: var(--red); font-weight: 600; }
 
     /* Quick test row */
-    .quick-chips {
-      display: flex; gap: 6px; margin-bottom: 12px;
-    }
+    .quick-chips { display: flex; gap: 6px; margin-bottom: 12px; }
     .chip {
-      background: var(--card); border: 1px solid var(--card-border);
-      border-radius: 8px; padding: 6px 4px; font-size: 11px; font-weight: 600;
-      color: var(--text); cursor: pointer; transition: background .15s;
-      white-space: nowrap; flex: 1;
-      font-family: inherit;
+      background: transparent; border: 1px solid var(--line);
+      border-radius: 9px; padding: 8px 4px; font-size: 11px; font-weight: 600;
+      color: var(--text); cursor: pointer;
+      white-space: nowrap; flex: 1; font-family: inherit;
+      text-transform: uppercase; letter-spacing: .06em;
+      transition: background .15s, border-color .15s, color .15s;
     }
-    .chip:hover { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); }
+    .chip:hover { background: rgba(255,255,255,.06); border-color: var(--line-strong); }
 
     .warn {
-      background: var(--red-soft); border: 1px solid #e5b3ae;
-      color: #7c241d; font-size: 11.5px; line-height: 1.55; padding: 9px 12px;
+      background: rgba(227,25,55,.08); border: 1px solid rgba(227,25,55,.32);
+      color: #ff9aa6; font-size: 11.5px; line-height: 1.55; padding: 10px 12px;
       border-radius: 10px; margin-bottom: 10px; display: none;
     }
 
     /* Cards */
     .card {
-      background: var(--card); border: 1px solid var(--card-border);
-      border-radius: 12px; margin-bottom: 10px; overflow: hidden;
+      background: var(--panel); border: 1px solid var(--line);
+      border-radius: 14px; margin-bottom: 10px; overflow: hidden;
+      transition: border-color .2s;
     }
+    .card:hover { border-color: var(--line-strong); }
+    .card[open] { border-color: var(--line-strong); }
     .card > summary {
-      font-size: 11px; font-weight: 650; letter-spacing: 1.1px; padding: 12px 14px;
+      font-size: 10px; font-weight: 700; letter-spacing: .22em; padding: 13px 14px;
       cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px;
       user-select: none; color: var(--text);
     }
     .card > summary::-webkit-details-marker { display: none; }
     .card > summary .tag {
-      margin-left: auto; font-size: 10px; font-weight: 500; letter-spacing: 0;
-      color: var(--text-faint);
+      margin-left: auto; font-size: 9px; font-weight: 500; letter-spacing: .1em;
+      color: var(--faint); text-transform: uppercase;
     }
     .card .body { padding: 2px 14px 14px; }
 
-    .grp { padding: 11px 0; border-top: 1px solid #efe9db; }
+    .grp { padding: 11px 0; border-top: 1px solid rgba(255,255,255,.05); }
     .grp:first-child { border-top: 0; padding-top: 4px; }
     .lbl {
-      font-size: 11.5px; color: var(--text-muted); margin-bottom: 6px;
-      display: block; font-weight: 500;
+      font-size: 11px; color: var(--muted); margin-bottom: 6px;
+      display: block; font-weight: 500; letter-spacing: .02em;
     }
-    .lbl small { color: var(--text-faint); }
+    .lbl small { color: var(--faint); }
 
     input[type=text], select {
-      width: 100%; background: #fff; color: var(--text);
-      border: 1px solid var(--card-border); padding: 8px 10px; border-radius: 8px;
-      font-size: 12.5px; font-family: inherit; transition: border-color .15s;
+      width: 100%; background: #131519; color: var(--text);
+      border: 1px solid var(--line); padding: 9px 10px; border-radius: 9px;
+      font-size: 12.5px; font-family: inherit; transition: border-color .15s, background .15s;
     }
     input[type=text]:focus, select:focus {
-      border-color: var(--accent); outline: none;
-      box-shadow: 0 0 0 3px rgba(193, 95, 60, 0.14);
+      border-color: rgba(255,255,255,.55); outline: none;
+      background: #17191e; box-shadow: 0 0 0 3px rgba(255,255,255,.07);
     }
-    input[type=range] { width: 100%; accent-color: var(--accent); cursor: pointer; height: 22px; }
+    input[type=range] { width: 100%; accent-color: var(--red); cursor: pointer; height: 22px; }
 
     .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
     .row .t { font-size: 12.5px; font-weight: 600; }
-    .row .d { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+    .row .d { font-size: 11px; color: var(--muted); margin-top: 1px; }
     .val {
-      font-size: 11px; color: var(--accent); font-weight: 650; font-family: ui-monospace, monospace;
-      white-space: nowrap; background: var(--accent-soft); padding: 3px 9px; border-radius: 99px;
+      font-size: 11px; color: var(--red); font-weight: 650; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: nowrap; background: rgba(227,25,55,.09); border: 1px solid rgba(227,25,55,.3);
+      padding: 3px 9px; border-radius: 99px; letter-spacing: .03em;
     }
 
     /* Switch */
@@ -169,48 +183,51 @@
     .sw input { opacity: 0; width: 0; height: 0; }
     .sl {
       position: absolute; cursor: pointer; inset: 0;
-      background: #ddd5c2; transition: .18s; border-radius: 99px;
+      background: rgba(255,255,255,.16); transition: .18s; border-radius: 99px;
     }
     .sl:before {
       position: absolute; content: ""; height: 15px; width: 15px; left: 3px; bottom: 3px;
-      background: #fffdf9; transition: .18s; border-radius: 50%;
-      box-shadow: 0 1px 2px rgba(0,0,0,.2);
+      background: #f4f4f2; transition: .18s; border-radius: 50%;
+      box-shadow: 0 1px 3px rgba(0,0,0,.5);
     }
-    input:checked + .sl { background: var(--accent); }
-    input:checked + .sl:before { transform: translateX(15px); }
+    input:checked + .sl { background: var(--red); }
+    input:checked + .sl:before { transform: translateX(15px); background: #fff; }
 
     .cmd { display: flex; gap: 7px; align-items: center; }
     .cmd input { flex: 1; min-width: 0; }
     .tbtn {
-      flex-shrink: 0; width: 32px; height: 32px; border-radius: 8px;
-      border: 1px solid var(--card-border); cursor: pointer;
-      background: #fff; color: var(--accent); font-size: 12px; transition: .15s;
+      flex-shrink: 0; width: 34px; height: 34px; border-radius: 9px;
+      border: 1px solid var(--line); cursor: pointer; font-size: 9px; letter-spacing: .04em;
+      background: transparent; color: var(--red); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-weight: 700; transition: .15s;
     }
-    .tbtn:hover { border-color: var(--accent-border); background: var(--accent-soft); }
+    .tbtn:hover { border-color: rgba(227,25,55,.45); background: rgba(227,25,55,.09); }
 
     .btnrow { display: flex; gap: 8px; margin-top: 10px; }
     .ghost {
-      flex: 1; padding: 9px; border-radius: 8px; border: 1px solid var(--card-border);
-      background: transparent; color: var(--text-muted); font-size: 11.5px; font-weight: 600;
-      cursor: pointer; transition: .15s; font-family: inherit;
+      flex: 1; padding: 10px; border-radius: 9px; border: 1px solid var(--line);
+      background: transparent; color: var(--muted); font-size: 11px; font-weight: 600;
+      cursor: pointer; font-family: inherit; text-transform: uppercase; letter-spacing: .12em;
+      transition: .15s;
     }
-    .ghost:hover { color: var(--text); border-color: var(--text-faint); }
+    .ghost:hover { color: var(--text); border-color: var(--line-strong); background: rgba(255,255,255,.05); }
 
-    .hint { font-size: 11px; color: var(--text-muted); line-height: 1.7; }
+    .hint { font-size: 11px; color: var(--muted); line-height: 1.75; }
     .hint code {
-      background: #f1ece0; border: 1px solid var(--card-border);
-      padding: 1px 6px; border-radius: 5px; font-family: ui-monospace, monospace;
-      color: var(--accent); font-size: 10.5px;
+      background: rgba(227,25,55,.08); border: 1px solid rgba(227,25,55,.25);
+      padding: 1px 6px; border-radius: 5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #ff8fa0; font-size: 10.5px;
     }
     .hint b { color: var(--text); }
+    .hint i { color: rgba(255,255,255,.66); }
     kbd {
-      background: #fff; border: 1px solid var(--card-border);
+      background: #131519; border: 1px solid var(--line);
       border-bottom-width: 2px; border-radius: 5px; padding: 1px 7px; font-size: 10px;
-      font-family: ui-monospace, monospace; color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--text);
     }
     .foot {
-      text-align: center; font-size: 10.5px; color: var(--text-faint);
-      margin-top: 4px;
+      text-align: center; font-size: 9.5px; color: var(--faint);
+      margin-top: 4px; text-transform: uppercase; letter-spacing: .14em;
     }
   </style>
 </head>
@@ -221,7 +238,7 @@
       <h1>VoiceScroll <span>Ultimate</span></h1>
       <div class="sub">Voice scrolling for web &amp; PDF</div>
     </div>
-    <div class="ver">v25</div>
+    <div class="ver">v25.1</div>
   </div>
 
   <div class="status" id="statusCard">
@@ -350,13 +367,16 @@
         • Quantifiers: <code>down three</code>, <code>down a little</code>, <code>half page</code>, <code>all the way down</code>.<br>
         • Auto-scroll: <code>keep scrolling down</code> → <code>faster</code> / <code>slower</code> → <code>stop</code>.<br>
         • Pause with <code>sleep</code> · resume with <code>wake up</code>.<br>
-        • <b>Local PDFs (file://)</b>: enable <i>Allow access to file URLs</i> at <code>chrome://extensions</code>.<br>
-        • Note: Chrome settings &amp; Web Store pages block all extensions.
+        • <b>Works on any website</b>, including pages that scroll inside frames.<br>
+        • <b>Native PDFs &amp; embedded files</b>: enabling on a PDF switches to <i>PDF mode</i> — a tiny voice hub listens while scrolling is driven through the browser's trusted input engine. First run shows a small “debug” bar briefly; it disappears when it stops.<br>
+        • <b>Local PDFs (file://)</b>: PDF mode does not need “Allow access to file URLs” — but .html files on disk do.<br>
+        • <b>Edge</b>: speech uses Edge's own speech service; if a language is refused, retry with English (US) or update Edge.<br>
+        • Note: Chrome/Edge settings &amp; web-store pages block all extensions.
       </div>
     </div>
   </details>
 
-  <div class="foot">Speech runs through Chrome's built-in speech service</div>
+  <div class="foot">Speech runs through Chrome's / Edge's built-in speech service — no API key</div>
   <script src="popup.js"></script>
 </body>
 </html>
