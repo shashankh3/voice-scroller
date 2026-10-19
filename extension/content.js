@@ -1,4 +1,4 @@
-/* VoiceScroll Ultimate v25.1 — content script (ISOLATED world).
+/* VoiceScroll Ultimate v25.2 — content script (ISOLATED world).
  * Pin-accurate voice scrolling: zero-latency interim engine, fuzzy phonetic matching,
  * multi-alternative scoring, quantifiers, rAF precision scroller (CSS smooth-override),
  * native PDF wheel/shadow piercing, Web Audio earcons, HUD, cross-frame scroll bridge
@@ -54,6 +54,7 @@
   var activeLang = '';        // actual recognition language (falls back on Edge)
   var langFallbackTried = false;
   var animId = 0; // rAF scroll animation handle
+  var innerScanCache = { el: null, at: 0 }; // cached expensive inner-container scan
   var hudEl = null, hudOrb = null, hudText = null, hudSub = null,
       hudConfWrap = null, hudConfBar = null, hudTimer = null;
 
@@ -61,7 +62,7 @@
   // Entry shape: { t, cmd, mod, score, text, final }. Pruned regularly so long
   // sessions never grow unbounded.
   var executedSegments = {};
-  var interimDebounceTimer = null;
+  var interimTimers = {}; // per-segment settle timers — rapid commands don't cancel each other
   var audioCtx = null;
 
   function pruneSegments() {
@@ -79,6 +80,13 @@
         for (var j = 0; j < rest.length - 60; j++) delete executedSegments[rest[j]];
       }
     } catch (e) {}
+  }
+
+  function clearInterimTimers() {
+    try {
+      for (var k in interimTimers) clearTimeout(interimTimers[k]);
+    } catch (e) {}
+    interimTimers = {};
   }
 
   /* ================= audio earcons (Web Audio API) ================= */
@@ -296,6 +304,12 @@
           }
         }
       }
+      // The full-document scan below is expensive; auto-scroll ticks hit this
+      // path every 45 ms on container-scroll pages, so reuse a fresh result.
+      var cached = innerScanCache.el;
+      if (cached && cached.isConnected && (Date.now() - innerScanCache.at) < 2000 && isScrollable(cached)) {
+        return cached;
+      }
       var all = document.querySelectorAll('main, section, article, div[role="main"], div[role="feed"], div');
       var best = null, bestH = 0;
       for (var j = 0; j < all.length; j++) {
@@ -303,6 +317,8 @@
         var h = all[j].scrollHeight - all[j].clientHeight;
         if (h > bestH) { bestH = h; best = all[j]; }
       }
+      innerScanCache.el = best;
+      innerScanCache.at = Date.now();
       return best;
     } catch (e) { return null; }
   }
@@ -712,6 +728,10 @@
       return;
     }
     try { if (rec) { try { rec.abort(); } catch (e) {} rec = null; } } catch (e) {}
+    // A fresh recognizer restarts result indices at 0; stale dedup entries from
+    // the previous instance would suppress new commands, so drop them.
+    clearInterimTimers();
+    executedSegments = {};
 
     rec = new SR();
     rec.continuous = true;
@@ -889,7 +909,8 @@
 
       // 1. Immediate commands ("stop", "sleep", "wake") execute instantly with 0ms delay
       if (cmd === 'stop' || cmd === 'sleep' || (cmd === 'wake' && sleeping)) {
-        clearTimeout(interimDebounceTimer);
+        clearTimeout(interimTimers[segmentIdx]);
+        delete interimTimers[segmentIdx];
         executedSegments[segmentIdx] = { t: Date.now(), cmd: cmd, done: true, final: true,
           mod: parseModifier(best.text, cmd), score: best.hit.score, text: best.text };
         handleCommand(cmd, best.text, lastConfidence);
@@ -898,7 +919,8 @@
 
       // 2. If it is already final, execute immediately
       if (isFinal) {
-        clearTimeout(interimDebounceTimer);
+        clearTimeout(interimTimers[segmentIdx]);
+        delete interimTimers[segmentIdx];
         executedSegments[segmentIdx] = { t: Date.now(), cmd: cmd, done: true, final: true,
           mod: parseModifier(best.text, cmd), score: best.hit.score, text: best.text };
         handleCommand(cmd, best.text, lastConfidence);
@@ -906,9 +928,10 @@
       }
 
       // 3. For scroll commands in interim mode: brief 210ms settling window allows multi-word modifiers ("down three")
-      clearTimeout(interimDebounceTimer);
+      clearTimeout(interimTimers[segmentIdx]);
       (function (seg, b) {
-        interimDebounceTimer = setTimeout(function () {
+        interimTimers[seg] = setTimeout(function () {
+          delete interimTimers[seg];
           var p = executedSegments[seg];
           if (p && p.done) return;
           executedSegments[seg] = { t: Date.now(), cmd: b.hit.cmd, done: true, final: false,
@@ -1136,7 +1159,7 @@
     cancelAnim();
     notifyState(false);
     clearTimeout(restartTimer);
-    clearTimeout(interimDebounceTimer);
+    clearInterimTimers();
     try { if (rec) rec.abort(); } catch (e) {}
     rec = null;
     try {

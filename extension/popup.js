@@ -1,4 +1,4 @@
-// VoiceScroll Ultimate v25.1 — popup script.
+// VoiceScroll Ultimate v25.2 — popup script.
 var DEFAULTS = {
   dist: 400,
   smooth: true,

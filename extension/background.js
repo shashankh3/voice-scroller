@@ -1,4 +1,4 @@
-// VoiceScroll Ultimate v25.1 — background service worker.
+// VoiceScroll Ultimate v25.2 — background service worker.
 // Architecture:
 //  - "web" tabs: in-page content.js engine (zero-latency on-page recognition)
 //  - "pdf" tabs (native viewer pages no content script can enter): recognition
@@ -79,8 +79,8 @@ async function engineReady(tabId) {
     return !!(r && r.pong);
   } catch (e) {
     try {
-      await chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['vs-core.js'] });
-      await chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['content.js'] });
+      await chrome.scripting.executeScript({ target: { tabId: tabId, allFrames: true }, files: ['vs-core.js'] });
+      await chrome.scripting.executeScript({ target: { tabId: tabId, allFrames: true }, files: ['content.js'] });
       return true;
     } catch (e2) {
       return false;
@@ -96,8 +96,8 @@ async function toggleInTab(tabId) {
   } catch (e) {
     // If content script was not already loaded, inject and retry
     try {
-      await chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['vs-core.js'] });
-      await chrome.scripting.executeScript({ target: { tabId: tabId }, files: ['content.js'] });
+      await chrome.scripting.executeScript({ target: { tabId: tabId, allFrames: true }, files: ['vs-core.js'] });
+      await chrome.scripting.executeScript({ target: { tabId: tabId, allFrames: true }, files: ['content.js'] });
       var resp2 = await chrome.tabs.sendMessage(tabId, { cmd: 'VS_TOGGLE' });
       if (resp2 && typeof resp2.on === 'boolean') on = resp2.on;
     } catch (e2) {
@@ -191,6 +191,7 @@ async function stopHub() {
     if (chrome.offscreen && typeof chrome.offscreen.closeDocument === 'function') await chrome.offscreen.closeDocument();
   } catch (e) {}
   await detachAllDebuggers();
+  pdfAuto = {};
   try { await chrome.storage.session.set({ vsHubOn: false, vsHubPdfTabs: [] }); } catch (e) {}
   return true;
 }
@@ -225,6 +226,29 @@ chrome.debugger.onDetach.addListener(function (src) {
 
 chrome.tabs.onRemoved.addListener(function (tabId) {
   if (dbgTabs[tabId]) delete dbgTabs[tabId];
+  if (pdfAuto[tabId]) delete pdfAuto[tabId];
+  untrackPdfTab(tabId, false);
+});
+
+// Drop a tab from PDF-mode tracking (session list + ON badge) when it closes
+// or navigates away from a PDF, so the badge never sticks to a stale tab.
+async function untrackPdfTab(tabId, clearBadge) {
+  try {
+    var it = await chrome.storage.session.get({ vsHubPdfTabs: [] });
+    var list = it.vsHubPdfTabs || [];
+    var i = list.indexOf(tabId);
+    if (i >= 0) {
+      list.splice(i, 1);
+      await chrome.storage.session.set({ vsHubPdfTabs: list });
+      if (clearBadge) updateBadge(tabId, false);
+    }
+  } catch (e) {}
+}
+
+chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
+  if (!changeInfo || !changeInfo.url || tabMode(changeInfo.url) === 'pdf') return;
+  if (pdfAuto[tabId]) delete pdfAuto[tabId];
+  untrackPdfTab(tabId, true);
 });
 
 async function dbgAttach(tabId) {

@@ -1,4 +1,4 @@
-# VoiceScroll Ultimate (v25.1) — voice scrolling for Chrome AND Edge
+# VoiceScroll Ultimate (v25.2) — voice scrolling for Chrome AND Edge
 
 Hands-free scrolling for **any website, any native PDF, any embedded file** opened
 inside Chrome or Edge, using the built-in Web Speech API (no extra server, no API
@@ -6,6 +6,32 @@ key — audio is processed by the browser's speech service). Click
 **Enable Microphone**, then speak.
 
 Folder: `extension/` (load this folder as an unpacked extension).
+
+## What's new in v25.2 — smoothness pass
+
+- **Commands no longer vanish after auto-restarts.** The speech recognizer
+  restarts itself routinely (after silence or a network blip); result indices
+  restart at 0 while the duplicate-command filter kept stale entries from the
+  previous recognizer instance, so a fresh command landing on a reused index
+  could be silently ignored. Dedup state now resets on every restart, in both
+  the page engine and the PDF voice hub.
+- **Rapid commands don't cancel each other.** The 210 ms settle window used a
+  single shared timer, so "down" followed quickly by "up" cancelled the pending
+  "down" (it only fired late, on finalization). Settle timers are now
+  per command segment.
+- **Smoother auto-scroll on container-scroll pages** — the inner-scroll target
+  scan is cached for 2 s instead of re-scanning every `<div>` in the document
+  on each 45 ms tick (less jank on heavy pages). The cheap point-based probe
+  still runs live so layout changes are picked up immediately.
+- **Late-injected tabs get the full engine** — programmatic injection now
+  covers all frames, so the cross-frame scroll bridge also works on tabs that
+  were opened before the extension was installed or reloaded.
+- **Cleaner PDF-mode state** — closing a PDF tab or navigating it away from a
+  PDF now clears its ON badge and pending auto-scroll; stopping the hub resets
+  auto-scroll state too.
+- **New matcher regression tests** — `node tests/test-vs-core.js` locks down
+  homophones, EXACT_ONLY collision guards (wait ≠ wake, button ≠ bottom …),
+  quantifiers, edge jumps, sensitivities and custom phrases. No dependencies.
 
 ## What's new in v25.1 — "works everywhere"
 
@@ -109,6 +135,7 @@ node --check extension/content.js
 node --check extension/background.js
 node --check extension/voice-hub.js
 node --check extension/popup.js
+node tests/test-vs-core.js
 python -c "import json; json.load(open('extension/manifest.json')); print('manifest OK')"
 ```
 

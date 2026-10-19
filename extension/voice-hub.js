@@ -51,7 +51,7 @@
   var langFallbackTried = false;
   // Zero-latency interim engine segment tracking (same shape as content.js).
   var executedSegments = {};
-  var interimDebounceTimer = null;
+  var interimTimers = {}; // per-segment settle timers — rapid commands don't cancel each other
   var startWatchdog = null;
   var lastError = '';
   var bloqGrantTries = 0;
@@ -276,22 +276,25 @@
 
       // Immediate commands execute with 0 ms delay
       if (cmd === 'stop' || cmd === 'sleep' || (cmd === 'wake' && sleeping)) {
-        clearTimeout(interimDebounceTimer);
+        clearTimeout(interimTimers[segmentIdx]);
+        delete interimTimers[segmentIdx];
         executedSegments[segmentIdx] = { t: Date.now(), cmd: cmd, done: true, final: true, mod: matcher.parseModifier(best.text, cmd), text: best.text };
         handleCommand(cmd, best.text);
         return;
       }
       // Final -> execute immediately
       if (isFinal) {
-        clearTimeout(interimDebounceTimer);
+        clearTimeout(interimTimers[segmentIdx]);
+        delete interimTimers[segmentIdx];
         executedSegments[segmentIdx] = { t: Date.now(), cmd: cmd, done: true, final: true, mod: matcher.parseModifier(best.text, cmd), text: best.text };
         handleCommand(cmd, best.text);
         return;
       }
       // Interim: brief 210 ms settling window lets multi-word modifiers complete
-      clearTimeout(interimDebounceTimer);
+      clearTimeout(interimTimers[segmentIdx]);
       (function (seg, b) {
-        interimDebounceTimer = setTimeout(function () {
+        interimTimers[seg] = setTimeout(function () {
+          delete interimTimers[seg];
           var p = executedSegments[seg];
           if (p && p.done) return;
           executedSegments[seg] = { t: Date.now(), cmd: b.hit.cmd, done: true, final: false, mod: matcher.parseModifier(b.text, b.hit.cmd), text: b.text };
@@ -313,9 +316,22 @@
       if (keys.length <= 60) return;
       var now = Date.now();
       for (var i = 0; i < keys.length; i++) {
-        if (executedSegments[keys[i]] && (now - executedSegments[keys[i]].t) > 120000) delete executedSegments[keys[i]];
+        var en = executedSegments[keys[i]];
+        if (en && (now - en.t) > 120000) delete executedSegments[keys[i]];
+      }
+      var rest = Object.keys(executedSegments);
+      if (rest.length > 60) {
+        rest.sort(function (a, b) { return executedSegments[a].t - executedSegments[b].t; });
+        for (var j = 0; j < rest.length - 60; j++) delete executedSegments[rest[j]];
       }
     } catch (e) {}
+  }
+
+  function clearInterimTimers() {
+    try {
+      for (var k in interimTimers) clearTimeout(interimTimers[k]);
+    } catch (e) {}
+    interimTimers = {};
   }
 
   /* ================= speech engine ================= */
@@ -347,6 +363,10 @@
     var SR = speechCtor();
     if (!SR) { active = false; return; }
     try { if (rec) { try { rec.abort(); } catch (e) {} rec = null; } } catch (e) {}
+    // A fresh recognizer restarts result indices at 0; stale dedup entries from
+    // the previous instance would suppress new commands, so drop them.
+    clearInterimTimers();
+    executedSegments = {};
 
     rec = new SR();
     rec.continuous = true;
@@ -478,7 +498,7 @@
     sleeping = false;
     stopAuto();
     clearTimeout(restartTimer);
-    clearTimeout(interimDebounceTimer);
+    clearInterimTimers();
     clearTimeout(startWatchdog);
     try { if (rec) rec.abort(); } catch (e) {}
     rec = null;

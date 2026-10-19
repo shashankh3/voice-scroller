@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "VoiceScroll Ultimate",
-  "version": "25.1.0",
+  "version": "25.2.0",
   "description": "Hands-free voice scrolling for any website, embedded files and native PDFs in Chrome & Edge. Works on pages extensions normally cannot touch via a voice hub + trusted input events.",
   "permissions": [
     "activeTab",
