@@ -1,8 +1,11 @@
-/* VoiceScroll Ultimate v25.2 — content script (ISOLATED world).
- * Pin-accurate voice scrolling: zero-latency interim engine, fuzzy phonetic matching,
- * multi-alternative scoring, quantifiers, rAF precision scroller (CSS smooth-override),
- * native PDF wheel/shadow piercing, Web Audio earcons, HUD, cross-frame scroll bridge
- * and a chrome.debugger relay for embedded PDFs pages cannot script normally.
+/* VoiceScroll Ultimate v26.0 — content script (ISOLATED world).
+ * Pin-accurate voice scrolling: zero-latency interim engine, fuzzy phonetic
+ * matching (English + हिन्दी via vs-core), multi-alternative scoring,
+ * quantifiers, rAF precision scroller (CSS smooth-override), rAF frame-locked
+ * auto-scroll, native PDF wheel/shadow piercing, Web Audio earcons, HUD with
+ * clickable mic orb, "help" voice command with an on-page cheat sheet,
+ * cross-frame scroll bridge and a chrome.debugger relay for embedded PDFs
+ * pages cannot script normally.
  * Command matching lives in vs-core.js (shared with the PDF voice hub).
  */
 (function () {
@@ -31,7 +34,8 @@
     cSleep: 'sleep, pause, pause listening',
     cWake: 'wake up, wake, resume, start listening',
     cFaster: 'faster, speed up, quicker, go faster',
-    cSlower: 'slower, slow down, speed down, go slower'
+    cSlower: 'slower, slow down, speed down, go slower',
+    cHelp: 'help, what can i say, show commands'
   };
 
   var cfg = Object.assign({}, DEFAULTS);
@@ -51,12 +55,15 @@
   var autoTimer = null;
   var autoDir = 0;
   var autoStall = 0;
+  var autoStallClock = 0; // ms since last stall check (rAF loop)
+  var autoLastTs = 0;
   var activeLang = '';        // actual recognition language (falls back on Edge)
   var langFallbackTried = false;
   var animId = 0; // rAF scroll animation handle
   var innerScanCache = { el: null, at: 0 }; // cached expensive inner-container scan
   var hudEl = null, hudOrb = null, hudText = null, hudSub = null,
       hudConfWrap = null, hudConfBar = null, hudTimer = null;
+  var helpEl = null, helpTimer = null;
 
   // Zero-latency interim engine segment tracking.
   // Entry shape: { t, cmd, mod, score, text, final }. Pruned regularly so long
@@ -218,7 +225,23 @@
   }
 
   /* ================= precision scroller ================= */
+  // PDF probes hit the DOM on every auto-scroll frame; cache the scan result
+  // briefly (invalidated when the element leaves the document).
+  var pdfScanCache = { r: null, at: 0 };
   function pdfElement() {
+    var now = Date.now();
+    if (now - pdfScanCache.at < 400) {
+      var c = pdfScanCache.r;
+      if (!c || (c.el && c.el.isConnected)) return c;
+      pdfScanCache.r = null;
+    }
+    var r = pdfElementScan();
+    pdfScanCache.r = r;
+    pdfScanCache.at = now;
+    return r;
+  }
+
+  function pdfElementScan() {
     try {
       // 1. Direct PDF viewer custom element (e.g. Chrome open viewer, PDF.js)
       var viewer = document.querySelector('pdf-viewer');
@@ -608,8 +631,11 @@
   }
 
   /* ================= auto-scroll ================= */
-  function autoStep() {
-    return Math.max(8, Math.round(cfg.speed * 0.9));
+  // Frame-locked auto-scroll: time-based velocity on requestAnimationFrame
+  // instead of fixed 45 ms interval jumps, so the glide is silky at any
+  // refresh rate (60/120/144 Hz). Speed 40 ≈ 800 px/s.
+  function autoStepFor(dtMs) {
+    return cfg.speed * 20 * (dtMs || 45) / 1000;
   }
 
   function startAuto(dir) {
@@ -617,42 +643,55 @@
     autoDir = dir;
     cancelAnim();
     autoStall = 0;
+    autoStallClock = 0;
+    autoLastTs = 0;
     playEarcon('cmd');
-    autoTimer = setInterval(function () {
-      autoTick();
-    }, 45);
+    autoTimer = requestAnimationFrame(autoFrame);
     if (isTop) showHud(autoDir > 0 ? 'Auto-scroll down' : 'Auto-scroll up', 'success', 'say "stop" · "faster" · "slower"');
   }
 
-  function autoTick() {
+  function autoFrame(ts) {
+    if (!autoDir) { autoTimer = null; return; }
+    if (autoLastTs) autoTick(Math.min(120, ts - autoLastTs));
+    autoLastTs = ts;
+    autoTimer = requestAnimationFrame(autoFrame);
+  }
+
+  function autoTick(dtMs) {
+    var step = autoStepFor(dtMs);
     var t = resolveTarget();
     if (t.isPdf) {
-      scrollPdf(t.pdf, autoDir * autoStep());
+      scrollPdf(t.pdf, autoDir * Math.max(1, Math.round(step)));
       return;
     }
     if (t.el && !t.isWin) {
-      try { t.el.scrollTop += autoDir * autoStep(); } catch (e) {}
+      try { t.el.scrollTop += autoDir * step; } catch (e) {}
       return;
     }
     var y0 = window.scrollY || document.documentElement.scrollTop || 0;
-    try { window.scrollBy(0, autoDir * autoStep()); } catch (e) {}
+    try { window.scrollBy(0, autoDir * step); } catch (e) {}
     var y1 = window.scrollY || document.documentElement.scrollTop || 0;
-    if (Math.abs(y1 - y0) < 2) {
+    if (Math.abs(y1 - y0) < 1) {
       // Window is not the scroller — try the inner container, then child frames,
       // then the debugger relay so auto-scroll also works on embedded viewers.
+      // Stall checks are throttled to ~8x/s so fallbacks don't thrash per frame.
+      autoStallClock += dtMs || 45;
+      if (autoStallClock < 120) return;
+      autoStallClock = 0;
       autoStall++;
       if (autoStall % 3 === 1) {
         var inner = innerScrollTarget();
-        if (inner) { try { inner.scrollTop += autoDir * autoStep(); } catch (e) {} return; }
+        if (inner) { try { inner.scrollTop += autoDir * step; } catch (e) {} return; }
       }
       var kids = 0;
-      try { kids = window.frames ? window.frames.length : 0; } catch (e) {}
+      try { kids = window.frames ? window.frames.length : 0; } catch (e) { kids = 0; }
       if (kids && isTop) {
         // Primary: offer each child frame the scroll via the postMessage bridge.
+        var delta = autoDir * Math.max(1, Math.round(step));
         var seq = ++bridgeSeq;
         bridgeAcked = false;
         try {
-          var payload = bridgePayload(autoDir * autoStep(), seq);
+          var payload = bridgePayload(delta, seq);
           for (var i = 0; i < kids; i++) window.frames[i].postMessage(payload, '*');
         } catch (e) {}
         if (autoStall >= 6) {
@@ -660,22 +699,23 @@
           autoStall = 3;
           setTimeout(function () {
             if (seq === bridgeSeq && !bridgeAcked) {
-              requestDebuggerScroll({ kind: 'wheel', delta: autoDir * autoStep() });
+              requestDebuggerScroll({ kind: 'wheel', delta: delta });
             }
           }, 160);
         }
       } else if (isTop && autoStall >= 3) {
         autoStall = 0;
-        requestDebuggerScroll({ kind: 'wheel', delta: autoDir * autoStep() });
+        requestDebuggerScroll({ kind: 'wheel', delta: autoDir * Math.max(1, Math.round(step)) });
       }
     } else {
       autoStall = 0;
+      autoStallClock = 0;
     }
   }
 
   function stopAuto(silent) {
     if (autoTimer) {
-      clearInterval(autoTimer);
+      cancelAnimationFrame(autoTimer);
       autoTimer = null;
       autoDir = 0;
     }
@@ -991,7 +1031,15 @@
       return;
     }
 
-    var keep = /\b(keep|continue|keep going|keep scrolling|start scrolling)\b/.test(' ' + normalize(raw) + ' ');
+    if (cmd === 'help') {
+      lastCmdTime = now;
+      lastTranscript = dupKey;
+      lastMatched = cmd;
+      showHelpPanel();
+      return;
+    }
+
+    var keep = VSCore.isKeep(raw);
     if (keep && (cmd === 'dn' || cmd === 'up')) {
       lastCmdTime = now;
       lastTranscript = dupKey;
@@ -1056,7 +1104,9 @@
     '.vs-hud.vs-show{opacity:1;transform:translateX(-50%) translateY(0);}',
     '.vs-hud.vs-live{border-color:rgba(227,25,55,.38);box-shadow:0 14px 44px -10px rgba(0,0,0,.55),0 0 22px -4px rgba(227,25,55,.28);}',
     '.vs-orb{width:30px;height:30px;border-radius:50%;flex-shrink:0;display:flex;align-items:center;justify-content:center;',
-    'font-size:13px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);transition:background .2s,border-color .2s;}',
+    'font-size:13px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);transition:background .2s,border-color .2s;',
+    'pointer-events:auto;cursor:pointer;}',
+    '.vs-hud .vs-orb:hover{background:rgba(255,255,255,.16);}',
     '.vs-orb span{display:flex;align-items:center;justify-content:center;}',
     '.vs-hud.vs-live .vs-orb{background:rgba(227,25,55,.15);border-color:rgba(227,25,55,.42);}',
     '.vs-hud.vs-err .vs-orb{background:rgba(255,82,82,.13);border-color:rgba(255,82,82,.38);}',
@@ -1065,8 +1115,83 @@
     '.vs-text{font-size:13px;font-weight:600;letter-spacing:.01em;color:#f4f4f2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:54vw;}',
     '.vs-sub{font-size:11px;font-weight:400;color:rgba(244,244,242,.52);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:54vw;margin-top:1px;}',
     '.vs-conf{width:56px;height:2px;border-radius:99px;background:rgba(255,255,255,.12);overflow:hidden;flex-shrink:0;}',
-    '.vs-conf i{display:block;height:100%;width:0;border-radius:99px;background:#e31937;box-shadow:0 0 8px rgba(227,25,55,.7);transition:width .25s;}'
+    '.vs-conf i{display:block;height:100%;width:0;border-radius:99px;background:#e31937;box-shadow:0 0 8px rgba(227,25,55,.7);transition:width .25s;}',
+    '.vs-help{position:fixed;bottom:96px;left:50%;transform:translateX(-50%) translateY(8px);',
+    'background:rgba(8,9,11,.92);border:1px solid rgba(255,255,255,.12);border-radius:14px;',
+    'padding:14px 20px 12px;z-index:2147483647;color:#f4f4f2;',
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Roboto,sans-serif;',
+    'backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);',
+    'box-shadow:0 18px 50px -12px rgba(0,0,0,.6);pointer-events:auto;cursor:default;',
+    'opacity:0;transition:opacity .18s,transform .18s;min-width:290px;max-width:min(88vw,460px);box-sizing:border-box;}',
+    '.vs-help.vs-show{opacity:1;transform:translateX(-50%) translateY(0);}',
+    '.vs-help h4{margin:0 0 8px;font-size:10px;font-weight:700;letter-spacing:.2em;text-transform:uppercase;color:rgba(244,244,242,.5);}',
+    '.vs-help .r{display:flex;gap:12px;font-size:12px;line-height:1.9;align-items:baseline;}',
+    '.vs-help .r b{color:#ff8fa0;font-weight:600;min-width:170px;white-space:nowrap;}',
+    '.vs-help .r span{color:rgba(244,244,242,.85);}'
   ].join('');
+
+  // Cheat-sheet rows for the "help" overlay (phrase → meaning), localized by
+  // speech language at open time. Toggled by saying help / मदद.
+  var EN_HELP_ROWS = [
+    ['"down" · "up"', 'Scroll a step'],
+    ['"page down" · "page up"', 'Scroll by page'],
+    ['"top" · "bottom"', 'Jump to edge'],
+    ['"down three" · "a little"', 'Quantifiers'],
+    ['"keep scrolling down"', 'Auto-scroll'],
+    ['"faster" · "slower"', 'Change speed'],
+    ['"stop" · "sleep" · "wake up"', 'Stop / pause / resume'],
+    ['"help"', 'This cheat sheet']
+  ];
+  var HI_HELP_ROWS = [
+    ['"नीचे" · "ऊपर"', 'नीचे / ऊपर स्क्रॉल'],
+    ['"पेज नीचे" · "पेज ऊपर"', 'पूरा पेज'],
+    ['"टॉप" · "सबसे नीचे"', 'सबसे ऊपर / नीचे'],
+    ['"नीचे तीन" · "थोड़ा"', 'मात्रा बताएं'],
+    ['"चलते रहो"', 'ऑटो-स्क्रॉल'],
+    ['"तेज़" · "धीरे"', 'गति बदलें'],
+    ['"रुको" · "सो जाओ" · "जागो"', 'रोकें / रुकें / शुरू करें'],
+    ['"मदद"', 'यह चीट शीट']
+  ];
+
+  function closeHelp() {
+    try { clearTimeout(helpTimer); } catch (e) {}
+    helpTimer = null;
+    try { if (helpEl && helpEl.parentNode) helpEl.parentNode.removeChild(helpEl); } catch (e) {}
+    helpEl = null;
+  }
+
+  function showHelpPanel() {
+    if (!isTop) return;
+    try {
+      if (helpEl) { closeHelp(); return; } // say/click again to dismiss
+      var host = document.body || document.documentElement;
+      if (!host) return;
+      var hi = /^hi/i.test(cfg.lang || '');
+      helpEl = document.createElement('div');
+      helpEl.className = 'vs-help';
+      helpEl.setAttribute('data-voicescroll', '1');
+      var h = document.createElement('h4');
+      h.textContent = hi ? 'बोलें — voice commands' : 'Say — voice commands';
+      helpEl.appendChild(h);
+      var rows = hi ? HI_HELP_ROWS : EN_HELP_ROWS;
+      for (var i = 0; i < rows.length; i++) {
+        var r = document.createElement('div');
+        r.className = 'r';
+        var b = document.createElement('b');
+        b.textContent = rows[i][0];
+        var s = document.createElement('span');
+        s.textContent = rows[i][1];
+        r.appendChild(b);
+        r.appendChild(s);
+        helpEl.appendChild(r);
+      }
+      helpEl.addEventListener('click', closeHelp);
+      host.appendChild(helpEl);
+      requestAnimationFrame(function () { if (helpEl) helpEl.className = 'vs-help vs-show'; });
+      helpTimer = setTimeout(closeHelp, 8000);
+      playEarcon('cmd');
+    } catch (e) {}
+  }
 
   function ensureHud() {
     if (!isTop) return null;
@@ -1086,6 +1211,14 @@
       hudOrb = document.createElement('div');
       hudOrb.className = 'vs-orb';
       hudOrb.innerHTML = '<span>🎤</span>';
+      hudOrb.title = 'VoiceScroll — click to toggle · Alt+Shift+V';
+      hudOrb.addEventListener('click', function (e) {
+        try { e.preventDefault(); e.stopPropagation(); } catch (er) {}
+        try {
+          var p = chrome.runtime.sendMessage({ cmd: 'VS_BG_TOGGLE' });
+          if (p && typeof p.catch === 'function') p.catch(function () {});
+        } catch (er) {}
+      });
       var main = document.createElement('div');
       main.className = 'vs-main';
       hudText = document.createElement('div');
@@ -1157,6 +1290,7 @@
     sleeping = false;
     stopAuto();
     cancelAnim();
+    closeHelp();
     notifyState(false);
     clearTimeout(restartTimer);
     clearInterimTimers();

@@ -1,4 +1,4 @@
-// VoiceScroll Ultimate v25.2 — background service worker.
+// VoiceScroll Ultimate v26.0 — background service worker.
 // Architecture:
 //  - "web" tabs: in-page content.js engine (zero-latency on-page recognition)
 //  - "pdf" tabs (native viewer pages no content script can enter): recognition
@@ -6,6 +6,8 @@
 //    driven from here with TRUSTED chrome.debugger wheel/key events. This is
 //    required because embedded/top-level PDFs render inside hidden browser
 //    frames that untrusted synthetic events cannot reach.
+importScripts('vs-core.js');
+
 var DEFAULTS = {
   dist: 400,
   smooth: true,
@@ -24,7 +26,8 @@ var DEFAULTS = {
   cSleep: 'sleep, pause, pause listening',
   cWake: 'wake up, wake, resume, start listening',
   cFaster: 'faster, speed up, quicker, go faster',
-  cSlower: 'slower, slow down, speed down, go slower'
+  cSlower: 'slower, slow down, speed down, go slower',
+  cHelp: 'help, what can i say, show commands'
 };
 
 function isScriptable(url) {
@@ -403,7 +406,9 @@ async function routeHubCommand(msg) {
   }
 
   if (mode === 'pdf') {
-    var keep = /\b(keep|continue|keep going|keep scrolling|start scrolling)\b/i.test(' ' + raw + ' ');
+    // The hub surfaces the cheat sheet itself; nothing to drive on the PDF tab.
+    if (name === 'help') return;
+    var keep = VSCore.isKeep(raw);
     if ((name === 'dn' || name === 'up') && keep) {
       pdfAuto[tab.id] = name === 'dn' ? 1 : -1;
       return;
@@ -476,7 +481,7 @@ async function toggleActiveTab() {
     if (st && st.on && mode === 'web') {
       await chrome.tabs.sendMessage(tab.id, { cmd: 'VS_TOGGLE' });
       updateBadge(tab.id, false);
-      return { on: false, mode: 'web' };
+      return { on: false, mode: 'web', stopped: true };
     }
   } catch (e) {}
 
@@ -492,7 +497,7 @@ async function toggleActiveTab() {
     (wants.vsHubPdfTabs || []).forEach(function (id) { updateBadge(id, false); });
     await chrome.storage.session.set({ vsHubPdfTabs: [] });
     await stopHub();
-    return { on: false, mode: 'hub' };
+    return { on: false, mode: 'hub', stopped: true };
   }
 
   if (mode === 'web') {

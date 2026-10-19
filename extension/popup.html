@@ -238,7 +238,7 @@
       <h1>VoiceScroll <span>Ultimate</span></h1>
       <div class="sub">Voice scrolling for web &amp; PDF</div>
     </div>
-    <div class="ver">v25.2</div>
+    <div class="ver">v26.0</div>
   </div>
 
   <div class="status" id="statusCard">
@@ -293,7 +293,7 @@
           <option value="en-US">English (US)</option>
           <option value="en-GB">English (UK)</option>
           <option value="en-IN">English (India)</option>
-          <option value="hi-IN">Hindi</option>
+          <option value="hi-IN">हिन्दी Hindi</option>
           <option value="es-ES">Spanish</option>
           <option value="fr-FR">French</option>
           <option value="de-DE">German</option>
@@ -318,7 +318,7 @@
   </details>
 
   <details class="card">
-    <summary>COMMANDS <span class="tag">11 groups</span></summary>
+    <summary>COMMANDS <span class="tag">12 groups</span></summary>
     <div class="body">
       <div class="grp">
         <span class="lbl">Scroll down <small>— “down three”, “down a little”</small></span>
@@ -352,7 +352,8 @@
       <div class="grp"><span class="lbl">Stop</span><div class="cmd"><input type="text" id="cStop"></div></div>
       <div class="grp"><span class="lbl">Pause listening</span><div class="cmd"><input type="text" id="cSleep"></div></div>
       <div class="grp" style="border:0;padding-bottom:2px"><span class="lbl">Resume listening</span><div class="cmd"><input type="text" id="cWake"></div></div>
-      <div class="hint" style="margin-top:8px">Mishearings like <code>done → down</code> are corrected automatically. Longest phrase always wins.</div>
+      <div class="grp" style="border:0;padding-bottom:2px"><span class="lbl">Help cheat sheet <small>— “what can I say”</small></span><div class="cmd"><input type="text" id="cHelp"></div></div>
+      <div class="hint" style="margin-top:8px">Mishearings like <code>done → down</code> are corrected automatically. Longest phrase always wins. हिन्दी phrases (नीचे · ऊपर · रुको …) are always active when the speech language is हिन्दी — Hinglish (<code>neeche</code>, <code>ruko</code>) works too.</div>
       <div class="btnrow"><button class="ghost" id="reset">Reset defaults</button></div>
     </div>
   </details>
@@ -364,9 +365,11 @@
         • Click <b>Enable Microphone</b> → <b>Allow</b> mic when prompted.<br>
         • Toggle listening anytime with <kbd>Alt+Shift+V</kbd>.<br>
         • Say <code>down</code> · <code>up</code> · <code>page down</code> · <code>top</code> · <code>bottom</code>.<br>
+        • Say <code>help</code> on any page for an on-screen command cheat sheet — or click the 🎤 orb to toggle.<br>
         • Quantifiers: <code>down three</code>, <code>down a little</code>, <code>half page</code>, <code>all the way down</code>.<br>
         • Auto-scroll: <code>keep scrolling down</code> → <code>faster</code> / <code>slower</code> → <code>stop</code>.<br>
         • Pause with <code>sleep</code> · resume with <code>wake up</code>.<br>
+        • <b>हिन्दी commands</b>: <code>नीचे</code> · <code>ऊपर</code> · <code>पेज नीचे</code> · <code>टॉप</code> · <code>सबसे नीचे</code> · <code>रुको</code> · <code>सो जाओ</code>/<code>जागो</code> · <code>तेज़</code>/<code>धीरे</code> · <code>मदद</code> — Hinglish (<code>neeche</code>, <code>ruko</code>, <code>tez</code>) works too. English keeps working alongside.
         • <b>Works on any website</b>, including pages that scroll inside frames.<br>
         • <b>Native PDFs &amp; embedded files</b>: enabling on a PDF switches to <i>PDF mode</i> — a tiny voice hub listens while scrolling is driven through the browser's trusted input engine. First run shows a small “debug” bar briefly; it disappears when it stops.<br>
         • <b>Local PDFs (file://)</b>: PDF mode does not need “Allow access to file URLs” — but .html files on disk do.<br>

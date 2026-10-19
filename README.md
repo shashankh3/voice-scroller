@@ -1,4 +1,4 @@
-# VoiceScroll Ultimate (v25.2) — voice scrolling for Chrome AND Edge
+# VoiceScroll Ultimate (v26.0) — voice scrolling for Chrome AND Edge
 
 Hands-free scrolling for **any website, any native PDF, any embedded file** opened
 inside Chrome or Edge, using the built-in Web Speech API (no extra server, no API
@@ -6,6 +6,36 @@ key — audio is processed by the browser's speech service). Click
 **Enable Microphone**, then speak.
 
 Folder: `extension/` (load this folder as an unpacked extension).
+
+## What's new in v26.0 — हिन्दी + help overlay + silky auto-scroll
+
+- **हिन्दी voice commands (Devanagari + Hinglish)** — with the speech language
+  set to हिन्दी (hi-IN) the matcher understands नीचे / ऊपर / पेज नीचे / पेज ऊपर /
+  टॉप / सबसे नीचे / रुको / सो जाओ / जागो / तेज़ / धीरे / मदद — plus romanized
+  Hinglish (neeche, oopar, ruko, jago, tez, dheere, madad…), because speech
+  services often transcribe Hindi in Latin script. Quantifiers work too:
+  नीचे तीन (×3), थोड़ा (nudge), बहुत (a lot), आधा पेज (half page),
+  एकदम नीचे / एकदम ऊपर (edge jumps) and चलते रहो / जारी रखो (auto-scroll).
+  Normalization collapses spelling variants (nukta: तेज़→तेज; anusvara:
+  नीचें→नीचे) and converts Devanagari digits (१२ → 12). English phrases stay
+  active alongside Hindi, and Hindi packs are only merged for hi-* languages —
+  zero impact on English users.
+- **"help" voice command + on-page cheat sheet** — say `help` /
+  `what can I say` / `मदद` for an instant on-page command card (auto-hides in
+  8 s, click to dismiss). The floating 🎤 orb is now clickable to toggle
+  listening, same as Alt+Shift+V.
+- **Frame-locked auto-scroll** — the web auto-scroller now runs on
+  requestAnimationFrame with time-based velocity (speed 40 ≈ 800 px/s) instead
+  of 45 ms interval jumps: equally smooth at 60/120/144 Hz. The
+  inner-container and PDF probes are cached between frames so the loop stays
+  light even on heavy pages.
+- **Honest popup state** — pressing Enable/Stop now distinguishes "stopped"
+  from "could not start" (previously a successful stop showed a red error).
+  The popup button also self-corrects when listening was toggled off via the
+  hotkey or the page orb.
+- **Matcher test suite expanded** — `node tests/test-vs-core.js` now covers the
+  full Hindi pack (Devanagari, Hinglish, numerals, modifiers, keep-scrolling)
+  on top of the English guards.
 
 ## What's new in v25.2 — smoothness pass
 
@@ -75,7 +105,9 @@ Folder: `extension/` (load this folder as an unpacked extension).
 - **Jump:** `top`, `bottom` (or `all the way down`, `all the way up`)
 - **Auto-scroll:** `keep scrolling down` / `keep scrolling up` → `faster` / `slower` → `stop`
 - **Hands-free Pause:** `sleep` → `wake up`
-- **Shortcut:** `Alt+Shift+V` toggles listening anywhere (web and PDF tabs).
+- **Help:** `help`, `what can I say` — on-page cheat sheet
+- **हिन्दी (speech language hi-IN):** `नीचे` · `ऊपर` · `पेज नीचे` · `पेज ऊपर` · `टॉप` · `सबसे नीचे` · `रुको` · `सो जाओ` / `जागो` · `तेज़` / `धीरे` · `चलते रहो` · `मदद` — plus Hinglish (neeche, oopar, ruko, tez, madad…)
+- **Shortcut:** `Alt+Shift+V` toggles listening anywhere (web and PDF tabs); the 🎤 orb on the page is clickable too.
 
 ## Install (Developer mode) — Chrome
 

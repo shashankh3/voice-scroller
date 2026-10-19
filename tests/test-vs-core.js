@@ -41,7 +41,8 @@ const PHRASE_DEFAULTS = {
   cSleep: 'sleep, pause, pause listening',
   cWake: 'wake up, wake, resume, start listening',
   cFaster: 'faster, speed up, quicker, go faster',
-  cSlower: 'slower, slow down, speed down, go slower'
+  cSlower: 'slower, slow down, speed down, go slower',
+  cHelp: 'help, what can i say, show commands'
 };
 
 const m = VSCore.createMatcher(Object.assign({ sensitivity: 'balanced' }, PHRASE_DEFAULTS));
@@ -110,6 +111,90 @@ eq(cmdOf(custom, 'descend'), 'dn', 'custom down phrase');
 eq(cmdOf(custom, 'lower'), 'dn', 'custom down phrase 2');
 eq(cmdOf(custom, 'ascend'), 'up', 'custom up phrase');
 eq(cmdOf(custom, 'down'), null, 'default phrase removed when overridden');
+
+// --- help command (English) ---
+eq(cmdOf(m, 'help'), 'help', 'help -> help');
+eq(cmdOf(m, 'what can i say'), 'help', 'what can i say -> help');
+eq(cmdOf(m, 'help me scroll down a lot'), 'dn', 'real command beats help on ties');
+
+// ================= हिन्दी (hi-IN) =================
+const hm = VSCore.createMatcher(Object.assign({}, PHRASE_DEFAULTS, {
+  sensitivity: 'balanced',
+  lang: 'hi-IN',
+  cHelp: 'help, what can i say, show commands'
+}));
+
+// --- normalization of Devanagari variants ---
+eq(VSCore.normalize('नीचें'), 'नीचे', 'anusvara stripped: नीचें -> नीचे');
+eq(VSCore.normalize('तेज़'), 'तेज', 'nukta stripped: तेज़ -> तेज');
+eq(VSCore.normalize('नीचे १२'), 'नीचे 12', 'Devanagari digits -> ASCII');
+
+// --- Devanagari commands ---
+eq(cmdOf(hm, 'नीचे'), 'dn', 'नीचे -> dn');
+eq(cmdOf(hm, 'स्क्रॉल नीचे'), 'dn', 'स्क्रॉल नीचे -> dn');
+eq(cmdOf(hm, 'नीचे जाओ'), 'dn', 'नीचे जाओ -> dn');
+eq(cmdOf(hm, 'निचे'), 'dn', 'homophone निचे -> dn');
+eq(cmdOf(hm, 'ऊपर'), 'up', 'ऊपर -> up');
+eq(cmdOf(hm, 'उपर'), 'up', 'homophone उपर -> up');
+eq(cmdOf(hm, 'पेज नीचे'), 'pd', 'पेज नीचे -> pd');
+eq(cmdOf(hm, 'अगला पेज'), 'pd', 'अगला पेज -> pd');
+eq(cmdOf(hm, 'पेज ऊपर'), 'pu', 'पेज ऊपर -> pu');
+eq(cmdOf(hm, 'टॉप'), 'top', 'टॉप -> top');
+eq(cmdOf(hm, 'सबसे ऊपर'), 'top', 'सबसे ऊपर -> top');
+eq(cmdOf(hm, 'सबसे नीचे'), 'bot', 'सबसे नीचे -> bot');
+eq(cmdOf(hm, 'बॉटम'), 'bot', 'बॉटम -> bot');
+eq(cmdOf(hm, 'रुको'), 'stop', 'रुको -> stop');
+eq(cmdOf(hm, 'रुक जाओ'), 'stop', 'रुक जाओ -> stop');
+eq(cmdOf(hm, 'रोको'), 'stop', 'homophone रोको -> stop');
+eq(cmdOf(hm, 'सो जाओ'), 'sleep', 'सो जाओ -> sleep');
+eq(cmdOf(hm, 'जागो'), 'wake', 'जागो -> wake');
+eq(cmdOf(hm, 'उठो'), 'wake', 'उठो -> wake');
+eq(cmdOf(hm, 'तेज़'), 'faster', 'तेज़ -> faster');
+eq(cmdOf(hm, 'तेज'), 'faster', 'तेज -> faster');
+eq(cmdOf(hm, 'धीरे'), 'slower', 'धीरे -> slower');
+eq(cmdOf(hm, 'मदद'), 'help', 'मदद -> help');
+eq(cmdOf(hm, 'down'), 'dn', 'English phrases still work in Hindi mode');
+
+// --- Hinglish (romanized) commands ---
+eq(cmdOf(hm, 'neeche'), 'dn', 'neeche -> dn');
+eq(cmdOf(hm, 'niche'), 'dn', 'homophone niche -> dn');
+eq(cmdOf(hm, 'oopar'), 'up', 'oopar -> up');
+eq(cmdOf(hm, 'ruko'), 'stop', 'ruko -> stop');
+eq(cmdOf(hm, 'jago'), 'wake', 'jago -> wake');
+eq(cmdOf(hm, 'tez'), 'faster', 'tez -> faster');
+eq(cmdOf(hm, 'dheere'), 'slower', 'dheere -> slower');
+eq(cmdOf(hm, 'madad'), 'help', 'madad -> help');
+eq(cmdOf(hm, 'page neeche'), 'pd', 'page neeche -> pd');
+eq(cmdOf(hm, 'sabse neeche'), 'bot', 'sabse neeche -> bot');
+
+// --- Hindi quantifiers ---
+eq(hm.parseModifier('नीचे तीन', 'dn').mult, 3, 'नीचे तीन -> x3');
+eq(hm.parseModifier('नीचे चार', 'dn').mult, 4, 'नीचे चार -> x4');
+eq(hm.parseModifier('नीचे दो', 'dn').mult, 2, 'नीचे दो -> x2');
+eq(hm.parseModifier('नीचे दस', 'dn').mult, 10, 'नीचे दस -> x10');
+eq(hm.parseModifier('नीचे ३', 'dn').mult, 3, 'Devanagari digit ३ -> x3');
+eq(hm.parseModifier('नीचे थोड़ा', 'dn').mult, 0.35, 'नीचे थोड़ा -> nudge');
+eq(hm.parseModifier('नीचे बहुत', 'dn').mult, 2.5, 'नीचे बहुत -> a lot');
+eq(hm.parseModifier('नीचे आधा पेज', 'dn').page, true, 'आधा पेज -> page flag');
+eq(hm.parseModifier('नीचे आधा पेज', 'dn').mult, 0.5, 'आधा पेज -> x0.5');
+eq(hm.parseModifier('neeche teen', 'dn').mult, 3, 'Hinglish teen -> x3');
+eq(hm.parseModifier('neeche thoda', 'dn').mult, 0.35, 'Hinglish thoda -> nudge');
+eq(hm.parseModifier('एकदम नीचे', 'dn').edge, 'bot', 'एकदम नीचे -> bottom edge');
+eq(hm.parseModifier('एकदम ऊपर', 'up').edge, 'top', 'एकदम ऊपर -> top edge');
+eq(cmdOf(hm, 'एकदम नीचे'), 'dn', 'एकदम नीचे still parses as dn');
+
+// --- keep-scrolling detection (shared by all three engines) ---
+eq(VSCore.isKeep('keep scrolling down'), true, 'isKeep english');
+eq(VSCore.isKeep('please continue scrolling'), true, 'isKeep continue');
+eq(VSCore.isKeep('चलते रहो नीचे'), true, 'isKeep चलते रहो');
+eq(VSCore.isKeep('जारी रखो'), true, 'isKeep जारी रखो');
+eq(VSCore.isKeep('chalte raho'), true, 'isKeep chalte raho');
+eq(VSCore.isKeep('down'), false, 'isKeep negative');
+eq(VSCore.isKeep('नीचे'), false, 'isKeep hindi negative');
+
+// --- Hindi packs must NOT leak into English mode ---
+eq(cmdOf(m, 'नीचे'), null, 'Hindi phrase inert for en matcher');
+eq(cmdOf(m, 'ruko'), null, 'Hinglish phrase inert for en matcher');
 
 console.log(passed + ' passed, ' + failed + ' failed');
 process.exit(failed ? 1 : 0);

@@ -1,4 +1,4 @@
-// VoiceScroll Ultimate v25.2 — popup script.
+// VoiceScroll Ultimate v26.0 — popup script.
 var DEFAULTS = {
   dist: 400,
   smooth: true,
@@ -17,10 +17,11 @@ var DEFAULTS = {
   cSleep: 'sleep, pause, pause listening',
   cWake: 'wake up, wake, resume, start listening',
   cFaster: 'faster, speed up, quicker, go faster',
-  cSlower: 'slower, slow down, speed down, go slower'
+  cSlower: 'slower, slow down, speed down, go slower',
+  cHelp: 'help, what can i say, show commands'
 };
 
-var KEYS = ['cDn', 'cUp', 'cPd', 'cPu', 'cTop', 'cBot', 'cStop', 'cSleep', 'cWake', 'cFaster', 'cSlower'];
+var KEYS = ['cDn', 'cUp', 'cPd', 'cPu', 'cTop', 'cBot', 'cStop', 'cSleep', 'cWake', 'cFaster', 'cSlower', 'cHelp'];
 
 var els = {
   btn: document.getElementById('btn'),
@@ -276,6 +277,10 @@ els.btn.addEventListener('click', async function () {
         if (r.reason === 'no-hub' || r.pdfOk === false) {
           showWarn('PDF hub started, but this browser may not expose the native viewer to extensions. Test with the chips below.');
         }
+      } else if (r.stopped) {
+        // Toggle was a successful "stop everything" (hub was running).
+        updateUI(false);
+        els.pill.textContent = '● Inactive';
       } else {
         setStatus('err', 'Cannot start PDF mode', '', 0);
         showWarn('PDF mode could not start. Try reloading the extension, then the PDF tab.');
@@ -284,6 +289,10 @@ els.btn.addEventListener('click', async function () {
       if (r.on) {
         updateUI(true);
         setStatus('live', 'Listening', 'say “down” · “up”', 0);
+      } else if (r.stopped) {
+        // Toggle was a successful "stop listening" — not an error.
+        updateUI(false);
+        els.pill.textContent = '● Inactive';
       } else {
         setStatus('err', 'Cannot start', 'refresh the page and retry', 0);
         if (/^file:/i.test(tab.url || '')) {
@@ -349,8 +358,9 @@ async function refreshStatus(quiet) {
     try { st = await chrome.tabs.sendMessage(tab.id, { cmd: 'VS_STATUS' }); } catch (e) { st = null; }
 
     if (!st) {
-      if (!quiet) updateUI(false);
-      else return;
+      // No engine on this tab — it cannot be listening, so reflect that even
+      // in quiet mode (e.g. listening was toggled off via hotkey/orb).
+      updateUI(false);
     } else {
       updateUI(!!st.on);
       if (st.on) {

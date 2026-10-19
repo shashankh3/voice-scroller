@@ -29,7 +29,8 @@
     cSleep: 'sleep, pause, pause listening',
     cWake: 'wake up, wake, resume, start listening',
     cFaster: 'faster, speed up, quicker, go faster',
-    cSlower: 'slower, slow down, speed down, go slower'
+    cSlower: 'slower, slow down, speed down, go slower',
+    cHelp: 'help, what can i say, show commands'
   };
 
   var cfg = Object.assign({}, DEFAULTS);
@@ -203,10 +204,15 @@
       setStatus('Stopped', 'say "down" to scroll again');
       return;
     }
-    if ((cmd === 'dn' || cmd === 'up') && /\b(keep|continue|keep going|keep scrolling|start scrolling)\b/i.test(' ' + String(raw || '') + ' ')) {
+    if ((cmd === 'dn' || cmd === 'up') && VSCore.isKeep(raw)) {
       exec(cmd, raw, 0, false); // content engine starts its own auto-scroll on web tabs
       startAuto(cmd === 'dn' ? 1 : -1);
       setStatus('Auto-scroll ' + (cmd === 'dn' ? 'down' : 'up'), 'say "stop" · "faster" · "slower"');
+      return;
+    }
+    if (cmd === 'help') {
+      exec(cmd, raw, 0, false); // web tabs show the on-page cheat sheet
+      setStatus('Say: down · up · page down · top', 'bottom · stop · sleep/wake · faster/slower · हिन्दी: नीचे · ऊपर · रुको · जागो · मदद');
       return;
     }
     if (cmd === 'faster' || cmd === 'slower') {
