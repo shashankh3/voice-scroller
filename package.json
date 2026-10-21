@@ -1,0 +1,13 @@
+{
+  "name": "voice-scroll-ultimate",
+  "version": "28.1.0",
+  "private": true,
+  "description": "VoiceScroll Ultimate — hands-free voice scrolling for Chrome and Edge (web pages + native PDFs).",
+  "scripts": {
+    "test": "node tests/run-all.js",
+    "check": "node --check extension/vs-core.js && node --check extension/content.js && node --check extension/background.js && node --check extension/voice-hub.js && node --check extension/popup.js",
+    "lint": "node tests/run-all.js"
+  },
+  "keywords": ["chrome-extension", "voice", "speech-recognition", "scrolling", "accessibility"],
+  "license": "MIT"
+}

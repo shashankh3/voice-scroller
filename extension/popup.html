@@ -130,6 +130,20 @@
       border-radius: 10px; margin-bottom: 10px; display: none;
     }
 
+    /* Keyboard focus must always be visible */
+    :focus-visible {
+      outline: 2px solid var(--red);
+      outline-offset: 2px;
+      border-radius: 6px;
+    }
+    .card > summary:focus-visible { outline-offset: -2px; }
+    input[type=text]:focus-visible, select:focus-visible { outline-offset: 1px; }
+
+    /* Respect the user's motion preference */
+    @media (prefers-reduced-motion: reduce) {
+      * { transition: none !important; animation: none !important; }
+    }
+
     /* Cards */
     .card {
       background: var(--panel); border: 1px solid var(--line);
@@ -238,11 +252,11 @@
       <h1>VoiceScroll <span>Ultimate</span></h1>
       <div class="sub">Voice scrolling for web &amp; PDF</div>
     </div>
-    <div class="ver">v26.0</div>
+    <div class="ver">v28.1</div>
   </div>
 
-  <div class="status" id="statusCard">
-    <div class="orb" id="orb">🎤</div>
+  <div class="status" id="statusCard" role="status" aria-live="polite" aria-atomic="true">
+    <div class="orb" id="orb" aria-hidden="true">🎤</div>
     <div style="flex: 1; min-width: 0;">
       <div class="st-t" id="stateTxt">Checking…</div>
       <div class="st-s" id="heardTxt">—</div>
@@ -250,9 +264,9 @@
     </div>
   </div>
 
-  <button id="btn"><span id="bt">Enable Microphone</span></button>
-  <div class="pill" id="pill">● Checking…</div>
-  <div class="warn" id="warn"></div>
+  <button id="btn" aria-describedby="pill"><span id="bt">Enable Microphone</span></button>
+  <div class="pill" id="pill" role="status" aria-live="polite">● Checking…</div>
+  <div class="warn" id="warn" role="alert"></div>
 
   <div class="quick-chips">
     <button class="chip" data-test="dn" title="Test Down">Down</button>
@@ -350,10 +364,11 @@
         <div class="cmd"><input type="text" id="cSlower"><button class="tbtn" data-test="slower" title="Test slower">▶</button></div>
       </div>
       <div class="grp"><span class="lbl">Stop</span><div class="cmd"><input type="text" id="cStop"></div></div>
+      <div class="grp"><span class="lbl">Undo <small>— take back the last scroll</small></span><div class="cmd"><input type="text" id="cUndo"></div></div>
       <div class="grp"><span class="lbl">Pause listening</span><div class="cmd"><input type="text" id="cSleep"></div></div>
       <div class="grp" style="border:0;padding-bottom:2px"><span class="lbl">Resume listening</span><div class="cmd"><input type="text" id="cWake"></div></div>
       <div class="grp" style="border:0;padding-bottom:2px"><span class="lbl">Help cheat sheet <small>— “what can I say”</small></span><div class="cmd"><input type="text" id="cHelp"></div></div>
-      <div class="hint" style="margin-top:8px">Mishearings like <code>done → down</code> are corrected automatically. Longest phrase always wins. हिन्दी phrases (नीचे · ऊपर · रुको …) are always active when the speech language is हिन्दी — Hinglish (<code>neeche</code>, <code>ruko</code>) works too.</div>
+      <div class="hint" style="margin-top:8px">Mishearings like <code>done → down</code> are corrected automatically. Longest phrase always wins. Say <code>help</code> on any page for an interactive command grid — you can also say a number to run a command, and <code>undo</code> takes back the last scroll. हिन्दी phrases (नीचे · ऊपर · रुको …) are always active when the speech language is हिन्दी — Hinglish (<code>neeche</code>, <code>ruko</code>) works too.</div>
       <div class="btnrow"><button class="ghost" id="reset">Reset defaults</button></div>
     </div>
   </details>
@@ -364,11 +379,14 @@
       <div class="hint">
         • Click <b>Enable Microphone</b> → <b>Allow</b> mic when prompted.<br>
         • Toggle listening anytime with <kbd>Alt+Shift+V</kbd>.<br>
+        • Only one listener runs at a time — enabling here retires the engine in any other tab.<br>
         • Say <code>down</code> · <code>up</code> · <code>page down</code> · <code>top</code> · <code>bottom</code>.<br>
-        • Say <code>help</code> on any page for an on-screen command cheat sheet — or click the 🎤 orb to toggle.<br>
+        • Say <code>help</code> on any page for an interactive command grid — click a tile, or say its number.<br>
+        • Say <code>undo</code> to take back the last scroll or jump.<br>
         • Quantifiers: <code>down three</code>, <code>down a little</code>, <code>half page</code>, <code>all the way down</code>.<br>
         • Auto-scroll: <code>keep scrolling down</code> → <code>faster</code> / <code>slower</code> → <code>stop</code>.<br>
         • Pause with <code>sleep</code> · resume with <code>wake up</code>.<br>
+        • Click the 🎤 orb on the page to toggle listening.<br>
         • <b>हिन्दी commands</b>: <code>नीचे</code> · <code>ऊपर</code> · <code>पेज नीचे</code> · <code>टॉप</code> · <code>सबसे नीचे</code> · <code>रुको</code> · <code>सो जाओ</code>/<code>जागो</code> · <code>तेज़</code>/<code>धीरे</code> · <code>मदद</code> — Hinglish (<code>neeche</code>, <code>ruko</code>, <code>tez</code>) works too. English keeps working alongside.
         • <b>Works on any website</b>, including pages that scroll inside frames.<br>
         • <b>Native PDFs &amp; embedded files</b>: enabling on a PDF switches to <i>PDF mode</i> — a tiny voice hub listens while scrolling is driven through the browser's trusted input engine. First run shows a small “debug” bar briefly; it disappears when it stops.<br>
@@ -380,6 +398,7 @@
   </details>
 
   <div class="foot">Speech runs through Chrome's / Edge's built-in speech service — no API key</div>
+  <script src="vs-core.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

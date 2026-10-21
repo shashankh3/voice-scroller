@@ -1,12 +1,9 @@
-// VoiceScroll Ultimate v26.0 — popup script.
-var DEFAULTS = {
-  dist: 400,
-  smooth: true,
-  sound: true,
-  lang: 'en-US',
-  sensitivity: 'balanced',
-  speed: 40,
-  showHud: true,
+// VoiceScroll Ultimate v28.1 — popup script.
+// Settings defaults come from vs-core (loaded before this file) so every
+// context shares one source of truth.
+var DEFAULTS = (typeof VSCore !== 'undefined' && VSCore.DEFAULTS) ? VSCore.DEFAULTS : {
+  dist: 400, smooth: true, sound: true, lang: 'en-US', sensitivity: 'balanced',
+  speed: 40, showHud: true,
   cDn: 'down, scroll down, go down, move down',
   cUp: 'up, scroll up, go up, move up',
   cPd: 'page down, next page, page forward',
@@ -21,7 +18,7 @@ var DEFAULTS = {
   cHelp: 'help, what can i say, show commands'
 };
 
-var KEYS = ['cDn', 'cUp', 'cPd', 'cPu', 'cTop', 'cBot', 'cStop', 'cSleep', 'cWake', 'cFaster', 'cSlower', 'cHelp'];
+var KEYS = ['cDn', 'cUp', 'cPd', 'cPu', 'cTop', 'cBot', 'cStop', 'cUndo', 'cSleep', 'cWake', 'cFaster', 'cSlower', 'cHelp'];
 
 var els = {
   btn: document.getElementById('btn'),
@@ -46,7 +43,14 @@ var els = {
 };
 
 var inputs = KEYS.map(function (k) { return document.getElementById(k); });
-inputs.forEach(function (input, i) { if (input) input.dataset.key = KEYS[i]; });
+inputs.forEach(function (input, i) {
+  if (!input) return;
+  input.dataset.key = KEYS[i];
+  // Every field gets an accessible name (the visible labels are plain spans).
+  var label = input.closest ? input.closest('.grp') : null;
+  var lbl = label ? label.querySelector('.lbl') : null;
+  input.setAttribute('aria-label', (lbl ? lbl.textContent.replace(/\s*—.*$/, '').trim() : KEYS[i]) + ' phrases, comma separated');
+});
 
 // Classify the active tab: 'web' (scriptable page), 'pdf' (native viewer,
 // hub mode) or 'restricted' (chrome://, store pages, etc).
@@ -69,6 +73,20 @@ function showWarn(msg) {
   els.warn.style.display = 'block';
 }
 
+// Named warnings: several parts of the popup can want to show a message at
+// the same time. Each one owns a slot and the most important slot wins, so a
+// status refresh never silently drops an error.
+var WARN_ORDER = ['blocked', 'error', 'phrase', 'info'];
+var warnSlots = {};
+function setWarn(id, msg) {
+  if (msg) warnSlots[id] = msg; else delete warnSlots[id];
+  var best = null;
+  for (var i = 0; i < WARN_ORDER.length; i++) {
+    if (warnSlots[WARN_ORDER[i]]) { best = warnSlots[WARN_ORDER[i]]; break; }
+  }
+  showWarn(best);
+}
+
 function setStatus(mode, state, heard, conf) {
   els.card.className = 'status' + (mode ? ' ' + mode : '');
   els.state.textContent = state;
@@ -77,18 +95,32 @@ function setStatus(mode, state, heard, conf) {
   els.orb.textContent = (mode === 'err' || mode === 'blocked') ? '⛔' : mode === 'sleep' ? '💤' : (mode === 'live' ? '🎙️' : '🎤');
 }
 
+function setPill(parts) {
+  // parts: array of [text, isAccent] — built with DOM nodes, never innerHTML.
+  els.pill.textContent = '';
+  for (var i = 0; i < parts.length; i++) {
+    var span = document.createElement('span');
+    span.textContent = parts[i][0];
+    if (parts[i][1]) {
+      span.style.fontWeight = '600';
+      span.style.color = 'var(--red)';
+    }
+    els.pill.appendChild(span);
+  }
+}
+
 function updateUI(on) {
   if (on) {
     els.btn.classList.add('on');
     els.bt.textContent = 'Stop Listening';
-    els.pill.innerHTML = '● <b>Active</b> — say “down”';
+    setPill([['● ', false], ['Active', true], [' — say “down”', false]]);
     if (els.state.textContent === 'Inactive' || els.state.textContent === 'Checking…') {
       setStatus('live', 'Listening', 'say “down” · “up”', 0);
     }
   } else {
     els.btn.classList.remove('on');
     els.bt.textContent = 'Enable Microphone';
-    els.pill.textContent = '● Inactive';
+    setPill([['● Inactive', false]]);
     setStatus('', 'Inactive', 'press Enable and speak', 0);
   }
 }
@@ -99,30 +131,33 @@ async function currentTab() {
 }
 
 // 1. Load settings
-chrome.storage.sync.get(DEFAULTS, function (cfg) {
-  if (!cfg) cfg = DEFAULTS;
-  els.dist.value = cfg.dist;
-  els.dVal.textContent = cfg.dist + 'px';
-  els.speed.value = cfg.speed;
-  els.sVal.textContent = cfg.speed + '%';
-  els.sens.value = cfg.sensitivity || 'balanced';
-  els.smooth.checked = cfg.smooth !== false;
-  if (els.sound) els.sound.checked = cfg.sound !== false;
-  els.hud.checked = cfg.showHud !== false;
+VSCore.storageGet(DEFAULTS, function (cfg) {
+  try {
+    if (!cfg) cfg = DEFAULTS;
+    els.dist.value = cfg.dist;
+    els.dVal.textContent = cfg.dist + 'px';
+    els.speed.value = cfg.speed;
+    els.sVal.textContent = cfg.speed + '%';
+    els.sens.value = cfg.sensitivity || 'balanced';
+    els.smooth.checked = cfg.smooth !== false;
+    if (els.sound) els.sound.checked = cfg.sound !== false;
+    els.hud.checked = cfg.showHud !== false;
 
-  if (els.lang) {
-    var has = Array.prototype.some.call(els.lang.options, function (o) { return o.value === cfg.lang; });
-    if (!has) {
-      var opt = document.createElement('option');
-      opt.value = cfg.lang;
-      opt.textContent = cfg.lang;
-      els.lang.appendChild(opt);
+    if (els.lang) {
+      var has = Array.prototype.some.call(els.lang.options, function (o) { return o.value === cfg.lang; });
+      if (!has) {
+        var opt = document.createElement('option');
+        opt.value = cfg.lang;
+        opt.textContent = cfg.lang;
+        els.lang.appendChild(opt);
+      }
+      els.lang.value = cfg.lang;
     }
-    els.lang.value = cfg.lang;
-  }
-  inputs.forEach(function (input) {
-    if (input) input.value = cfg[input.dataset.key] || '';
-  });
+    inputs.forEach(function (input) {
+      if (input) input.value = cfg[input.dataset.key] || '';
+    });
+    validatePhrases();
+  } catch (e) {}
 });
 
 // Live update listener
@@ -156,8 +191,41 @@ function save() {
     inputs.forEach(function (input) {
       if (input) data[input.dataset.key] = input.value;
     });
-    chrome.storage.sync.set(data);
+    VSCore.storageSet(data, function (err) {
+      if (!err) return;
+      // Chrome's sync storage has a per-item quota; a huge custom phrase
+      // list can exceed it. Say so instead of failing silently.
+      setWarn('error', 'Could not save the settings: ' + String((err && err.message) || err));
+    });
   }, 120);
+}
+
+// Warn about command groups that would not work with an empty phrase list.
+function validatePhrases() {
+  var empty = [];
+  var labels = {
+    cDn: 'down', cUp: 'up', cPd: 'page down', cPu: 'page up',
+    cTop: 'top', cBot: 'bottom', cStop: 'stop', cUndo: 'undo',
+    cSleep: 'sleep', cWake: 'wake up', cFaster: 'faster', cSlower: 'slower', cHelp: 'help'
+  };
+  inputs.forEach(function (input) {
+    if (!input) return;
+    var key = input.dataset.key;
+    var has = String(input.value || '').split(',').some(function (p) { return p.trim().length > 0; });
+    input.style.borderColor = has ? '' : 'rgba(255,82,82,.6)';
+    if (!has && labels[key]) empty.push(labels[key]);
+  });
+  if (empty.length) {
+    setWarn('phrase', 'No phrase left for: ' + empty.join(', ') + ' — that command will not work.');
+  } else {
+    setWarn('phrase', '');
+  }
+}
+
+// Remove every warning at once (used when the user starts a new action).
+function clearWarns() {
+  warnSlots = {};
+  showWarn('');
 }
 
 els.dist.addEventListener('input', function () { els.dVal.textContent = els.dist.value + 'px'; save(); });
@@ -167,10 +235,14 @@ els.smooth.addEventListener('change', save);
 if (els.sound) els.sound.addEventListener('change', save);
 els.hud.addEventListener('change', save);
 if (els.lang) els.lang.addEventListener('change', save);
-inputs.forEach(function (el) { if (el) el.addEventListener('input', save); });
+inputs.forEach(function (el) {
+  if (!el) return;
+  el.addEventListener('input', function () { validatePhrases(); save(); });
+  el.addEventListener('blur', validatePhrases);
+});
 
 els.reset.addEventListener('click', function () {
-  chrome.storage.sync.set(DEFAULTS, function () {
+  VSCore.storageSet(DEFAULTS, function () {
     els.dist.value = DEFAULTS.dist;
     els.dVal.textContent = DEFAULTS.dist + 'px';
     els.speed.value = DEFAULTS.speed;
@@ -181,6 +253,7 @@ els.reset.addEventListener('click', function () {
     els.hud.checked = DEFAULTS.showHud;
     if (els.lang) els.lang.value = DEFAULTS.lang;
     inputs.forEach(function (input) { if (input) input.value = DEFAULTS[input.dataset.key]; });
+    validatePhrases();
   });
 });
 
@@ -188,11 +261,11 @@ els.reset.addEventListener('click', function () {
 document.querySelectorAll('[data-test]').forEach(function (b) {
   b.addEventListener('click', async function () {
     var what = b.getAttribute('data-test');
-    showWarn('');
+    clearWarns();
     try {
       var tab = await currentTab();
       if (!tab || !tab.id || tabMode(tab.url) === 'restricted') {
-        showWarn('Open a normal webpage or PDF to test.');
+        setWarn('info', 'Open a normal webpage or PDF to test.');
         return;
       }
       if (tabMode(tab.url) === 'pdf') {
@@ -201,7 +274,7 @@ document.querySelectorAll('[data-test]').forEach(function (b) {
           await chrome.runtime.sendMessage({ cmd: 'VS_HUB_CMD', name: what, raw: '', mult: 1, dir: 0, tick: false });
           return;
         } catch (e) {
-          showWarn('Enable Microphone first (PDF mode uses the voice hub).');
+          setWarn('info', 'Enable Microphone first (PDF mode uses the voice hub).');
           return;
         }
       }
@@ -211,12 +284,12 @@ document.querySelectorAll('[data-test]').forEach(function (b) {
       } catch (e) {}
       try {
         var st = await chrome.tabs.sendMessage(tab.id, { cmd: 'VS_TEST', what: what });
-        if (!st) showWarn('Refresh the page, then test again.');
+        if (!st) setWarn('info', 'Refresh the page, then test again.');
       } catch (e) {
-        showWarn('Refresh the page, then test again.');
+        setWarn('info', 'Refresh the page, then test again.');
       }
     } catch (e) {
-      showWarn('Refresh the page, then test again.');
+      setWarn('info', 'Refresh the page, then test again.');
     }
   });
 });
@@ -236,14 +309,14 @@ async function grantMicToExtension() {
 // 3. Toggle button — routed through the background master toggle so web tabs,
 //    native PDF tabs (hub) and restricted pages all behave the same.
 els.btn.addEventListener('click', async function () {
-  showWarn('');
+  clearWarns();
   var tab = await currentTab();
-  if (!tab || !tab.id) { showWarn('No active tab found.'); return; }
+  if (!tab || !tab.id) { setWarn('info', 'No active tab found.'); return; }
 
   var mode = tabMode(tab.url);
   if (mode === 'restricted') {
     setStatus('blocked', 'Blocked here', 'store / chrome:// pages deny extensions', 0);
-    showWarn('Extensions are blocked on this page. Open any normal website or PDF and try again.');
+    setWarn('blocked', 'Extensions are blocked on this page. Open any normal website or PDF and try again.');
     return;
   }
 
@@ -255,7 +328,7 @@ els.btn.addEventListener('click', async function () {
       var granted = await grantMicToExtension();
       if (!granted) {
         setStatus('err', 'Microphone denied', 'need mic to listen', 0);
-        showWarn('Allow the microphone in the popup prompt to use PDF mode.');
+        setWarn('error', 'Allow the microphone in the popup prompt to use PDF mode.');
         els.btn.disabled = false;
         return;
       }
@@ -268,22 +341,23 @@ els.btn.addEventListener('click', async function () {
 
     if (!r) {
       setStatus('err', 'Background unreachable', 'reload the extension', 0);
-      showWarn('Could not reach the service worker. Reload the extension and retry.');
+      setWarn('error', 'Could not reach the service worker. Reload the extension and retry.');
     } else if (mode === 'pdf') {
       if (r.on) {
         updateUI(true);
         setStatus('live', 'Listening (PDF mode)', 'scrolling runs on the PDF tab · say “down”', 0);
-        els.pill.innerHTML = '● <b>PDF mode</b> — commands from the voice hub';
+        setPill([['● ', false], ['PDF mode', true], [' — commands from the voice hub', false]]);
         if (r.reason === 'no-hub' || r.pdfOk === false) {
-          showWarn('PDF hub started, but this browser may not expose the native viewer to extensions. Test with the chips below.');
+          setWarn('info', 'PDF hub started, but this browser may not expose the native viewer to extensions. Test with the chips below.');
         }
+        if (r.dbgError) setWarn('error', debuggerHint(r.dbgError));
       } else if (r.stopped) {
         // Toggle was a successful "stop everything" (hub was running).
         updateUI(false);
-        els.pill.textContent = '● Inactive';
+        setPill([['● Inactive', false]]);
       } else {
         setStatus('err', 'Cannot start PDF mode', '', 0);
-        showWarn('PDF mode could not start. Try reloading the extension, then the PDF tab.');
+        setWarn('error', 'PDF mode could not start. Try reloading the extension, then the PDF tab.');
       }
     } else {
       if (r.on) {
@@ -292,45 +366,63 @@ els.btn.addEventListener('click', async function () {
       } else if (r.stopped) {
         // Toggle was a successful "stop listening" — not an error.
         updateUI(false);
-        els.pill.textContent = '● Inactive';
+        setPill([['● Inactive', false]]);
       } else {
         setStatus('err', 'Cannot start', 'refresh the page and retry', 0);
         if (/^file:/i.test(tab.url || '')) {
-          showWarn('Could not start. Refresh the page and retry. (file:// URLs need “Allow access to file URLs” at chrome://extensions.)');
+          setWarn('error', 'Could not start. Refresh the page and retry. (file:// URLs need “Allow access to file URLs” at chrome://extensions.)');
         } else if (r.reason === 'restricted') {
           setStatus('blocked', 'Blocked here', 'this page denies extensions', 0);
-          showWarn('This page blocks extensions. Open any standard webpage or PDF.');
+          setWarn('blocked', 'This page blocks extensions. Open any standard webpage or PDF.');
         } else {
-          showWarn('Could not start here. Refresh the page and try again.');
+          setWarn('error', 'Could not start here. Refresh the page and try again.');
         }
       }
     }
   } catch (e) {
     setStatus('err', 'Error', String((e && e.message) || e).slice(0, 60), 0);
-    showWarn('Could not reach the page. Refresh it, click Enable, and allow the mic.');
+    setWarn('error', 'Could not reach the page. Refresh it, click Enable, and allow the mic.');
   } finally {
     els.btn.disabled = false;
   }
 });
 
 // 4. Status refresh (web engine on tab + hub state)
+var refreshInFlight = false;
 async function refreshStatus(quiet) {
+  // Never let two refreshes overlap — a slow background would otherwise
+  // pile up requests.
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  try {
+    await doRefreshStatus(quiet);
+  } catch (e) {
+    if (!quiet) updateUI(false);
+  } finally {
+    refreshInFlight = false;
+  }
+}
+
+async function doRefreshStatus(quiet) {
   try {
     var tab = await currentTab();
     var mode = tab && tabMode(tab.url);
 
-    // Hub state (PDF mode) — authoritative when running.
+    // Hub info is read first: it carries the last error even after the hub
+    // has shut itself down (mic blocked, no speech service, ...).
     var hub = null;
     try {
       hub = await chrome.runtime.sendMessage({ cmd: 'VS_BG_HUB_STATUS' });
     } catch (e) { hub = null; }
+    var info = { heard: '', matched: '', conf: 0, err: '' };
+    try { if (chrome.storage && chrome.storage.session) { var it = await chrome.storage.session.get({ vsHubInfo: {}}); info = it.vsHubInfo || info; } } catch (e) {}
 
     if (!tab || !tab.id) { if (!quiet) updateUI(false); return; }
 
     if (mode === 'restricted') {
       updateUI(false);
       setStatus('blocked', 'Blocked here', 'store / chrome:// pages deny extensions', 0);
-      if (!quiet) showWarn('Extensions are blocked on this page. Open any normal website or PDF.');
+      setWarn('blocked', 'Extensions are blocked on this page. Open any normal website or PDF.');
       return;
     }
 
@@ -338,19 +430,25 @@ async function refreshStatus(quiet) {
       if (chrome.extension && chrome.extension.isAllowedFileSchemeAccess) {
         chrome.extension.isAllowedFileSchemeAccess(function (isAllowed) {
           if (!isAllowed) {
-            showWarn('file:// page: enable “Allow access to file URLs” for VoiceScroll at chrome://extensions. (Native PDF tabs do not need this.)');
+            setWarn('info', 'file:// page: enable “Allow access to file URLs” for VoiceScroll at chrome://extensions. (Native PDF tabs do not need this.)');
           }
         });
       }
     }
 
     if (hub && (hub.on || hub.wanted)) {
+      if (info.err) {
+        // The hub could not start (mic blocked / no speech service) — be
+        // honest about it instead of showing a green "listening" pill.
+        updateUI(false);
+        setStatus('err', 'Hub error', errText(info.err), 0);
+        setWarn('error', hubErrHint(info.err));
+        return;
+      }
       updateUI(true);
-      var info = { heard: '', matched: '', conf: 0 };
-      try { if (chrome.storage && chrome.storage.session) { var it = await chrome.storage.session.get({ vsHubInfo: {}}); info = it.vsHubInfo || info; } } catch (e) {}
       var heard = info.heard ? '“' + String(info.heard).slice(0, 40) + '”' : 'say “down” · “up” (PDF hub)';
       setStatus('live', 'Listening (PDF mode)', heard, info.conf || 0);
-      els.pill.innerHTML = '● <b>PDF mode</b> — hub listening · say “stop” to end';
+      setPill([['● ', false], ['PDF mode', true], [' — hub listening · say “stop” to end', false]]);
       return;
     }
 
@@ -361,13 +459,20 @@ async function refreshStatus(quiet) {
       // No engine on this tab — it cannot be listening, so reflect that even
       // in quiet mode (e.g. listening was toggled off via hotkey/orb).
       updateUI(false);
+      if (info.err) {
+        setStatus('err', 'Hub error', errText(info.err), 0);
+        setWarn('error', hubErrHint(info.err));
+      }
     } else {
       updateUI(!!st.on);
-      if (st.on) {
+      if (st.err && !st.on) {
+        setStatus('err', 'Engine error', errText(st.err), 0);
+        setWarn('error', hubErrHint(st.err));
+      } else if (st.on) {
         var label = st.sleeping ? 'Paused' : 'Listening';
         var heardTxt = st.heard ? '“' + String(st.heard).slice(0, 40) + '”' : 'say “down” · “up”';
         setStatus(st.sleeping ? 'sleep' : 'live', label, heardTxt, st.conf || 0);
-        if (st.sleeping) els.pill.innerHTML = '● <b>Paused</b> — say “wake up”';
+        if (st.sleeping) setPill([['● ', false], ['Paused', true], [' — say “wake up”', false]]);
       }
     }
   } catch (e) {
@@ -375,5 +480,45 @@ async function refreshStatus(quiet) {
   }
 }
 
+// Human readable text for the recognizer error codes.
+function errText(code) {
+  var c = String(code || '');
+  if (c === 'not-allowed' || c === 'service-not-allowed') return 'microphone blocked';
+  if (c === 'audio-capture') return 'no microphone found';
+  if (c === 'language-not-supported') return 'language not supported';
+  if (c === 'speech-api-missing') return 'no speech service';
+  if (c === 'start-failed') return 'could not start';
+  if (c === 'unstable') return 'speech service unstable';
+  if (c === 'network') return 'network problem';
+  return c.replace(/-/g, ' ');
+}
+
+// The trusted-input engine needs the debugger API; the most common failure is
+// DevTools (or another debugger) already being attached to the tab.
+function debuggerHint(msg) {
+  var m = String(msg || '').toLowerCase();
+  if (m.indexOf('already attached') >= 0 || m.indexOf('another debugger') >= 0) {
+    return 'DevTools is already debugging this tab. Close DevTools (F12) and press Enable again.';
+  }
+  if (m.indexOf('not allowed') >= 0 || m.indexOf('permission') >= 0) {
+    return 'This browser does not allow extensions to drive trusted input here.';
+  }
+  return 'Trusted input is unavailable in this tab: ' + String(msg || '').slice(0, 80);
+}
+
+function hubErrHint(code) {
+  var c = String(code || '');
+  if (c === 'not-allowed' || c === 'service-not-allowed' || c === 'audio-capture') {
+    return 'The microphone is blocked. Click the 🔒/🎤 icon in the address bar, allow the microphone, then press Enable again.';
+  }
+  if (c === 'language-not-supported') {
+    return 'This browser refuses the selected speech language. Pick English (US) below, or use Chrome desktop.';
+  }
+  if (c === 'speech-api-missing') {
+    return 'This browser has no Web Speech API. Use Chrome or Edge on the desktop.';
+  }
+  return 'VoiceScroll could not start. Reload the extension at chrome://extensions and try again.';
+}
+
 refreshStatus(false);
-setInterval(function () { refreshStatus(true); }, 2000);
+setInterval(function () { refreshStatus(true); }, 1200);

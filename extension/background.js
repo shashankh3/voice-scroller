@@ -8,27 +8,8 @@
 //    frames that untrusted synthetic events cannot reach.
 importScripts('vs-core.js');
 
-var DEFAULTS = {
-  dist: 400,
-  smooth: true,
-  sound: true,
-  lang: 'en-US',
-  sensitivity: 'balanced',
-  speed: 40,
-  showHud: true,
-  cDn: 'down, scroll down, go down, move down',
-  cUp: 'up, scroll up, go up, move up',
-  cPd: 'page down, next page, page forward',
-  cPu: 'page up, previous page, page back',
-  cTop: 'top, go to top, scroll to top',
-  cBot: 'bottom, go to bottom, scroll to bottom',
-  cStop: 'stop, halt, freeze, stop scrolling',
-  cSleep: 'sleep, pause, pause listening',
-  cWake: 'wake up, wake, resume, start listening',
-  cFaster: 'faster, speed up, quicker, go faster',
-  cSlower: 'slower, slow down, speed down, go slower',
-  cHelp: 'help, what can i say, show commands'
-};
+// Settings defaults live in vs-core so every context shares one source.
+var DEFAULTS = VSCore.DEFAULTS;
 
 function isScriptable(url) {
   if (!url) return false;
@@ -53,24 +34,36 @@ function tabMode(url) {
 function updateBadge(tabId, on) {
   try {
     if (!chrome.action) return;
+    var ps = [];
     if (on) {
-      chrome.action.setBadgeText({ tabId: tabId, text: 'ON' });
-      chrome.action.setBadgeBackgroundColor({ tabId: tabId, color: '#16a34a' });
+      ps.push(chrome.action.setBadgeText({ tabId: tabId, text: 'ON' }));
+      ps.push(chrome.action.setBadgeBackgroundColor({ tabId: tabId, color: '#16a34a' }));
+      if (typeof chrome.action.setTitle === 'function') {
+        ps.push(chrome.action.setTitle({ tabId: tabId, title: 'VoiceScroll is listening — click to stop' }));
+      }
     } else {
-      chrome.action.setBadgeText({ tabId: tabId, text: '' });
+      ps.push(chrome.action.setBadgeText({ tabId: tabId, text: '' }));
+      if (typeof chrome.action.setTitle === 'function') {
+        ps.push(chrome.action.setTitle({ tabId: tabId, title: 'VoiceScroll Ultimate — click to enable voice scrolling' }));
+      }
+    }
+    // A closed tab makes these calls reject — swallow it instead of leaving
+    // an unhandled promise rejection in the service worker.
+    for (var i = 0; i < ps.length; i++) {
+      if (ps[i] && typeof ps[i].catch === 'function') ps[i].catch(function () {});
     }
   } catch (e) {}
 }
 
 chrome.runtime.onInstalled.addListener(function (details) {
   if (details.reason === 'install' || details.reason === 'update') {
-    chrome.storage.sync.get(DEFAULTS, function (existing) {
+    VSCore.storageGet(DEFAULTS, function (existing) {
       var fill = {};
       var need = false;
       for (var k in DEFAULTS) {
         if (existing[k] === undefined) { fill[k] = DEFAULTS[k]; need = true; }
       }
-      if (need) chrome.storage.sync.set(fill);
+      if (need) VSCore.storageSet(fill);
     });
   }
 });
@@ -109,6 +102,55 @@ async function toggleInTab(tabId) {
   }
   if (on !== null) updateBadge(tabId, on);
   return on;
+}
+
+/* ================= single-listener registry =================
+ * Only one recognizer may hold the microphone at a time. The tab that owns
+ * the page engine is remembered in session storage so starting a new engine
+ * can stop the old one (two live engines would fight over the mic and both
+ * would fail with "audio-capture").
+ */
+async function getActiveTab() {
+  try {
+    var it = await chrome.storage.session.get({ vsActiveTab: -1 });
+    return (it && it.vsActiveTab != null) ? it.vsActiveTab : -1;
+  } catch (e) { return -1; }
+}
+
+async function setActiveTab(tabId) {
+  try { await chrome.storage.session.set({ vsActiveTab: tabId }); } catch (e) {}
+}
+
+async function clearActiveTab(tabId) {
+  try {
+    var cur = await getActiveTab();
+    if (tabId == null || cur === tabId) await chrome.storage.session.set({ vsActiveTab: -1 });
+  } catch (e) {}
+}
+
+// Stop every other listener (page engines in other tabs and the PDF hub).
+async function stopOtherEngines(exceptTabId) {
+  var other = await getActiveTab();
+  if (other !== -1 && other !== exceptTabId) {
+    try { await chrome.tabs.sendMessage(other, { cmd: 'VS_STOP' }); } catch (e) {}
+    updateBadge(other, false);
+  }
+  // The hub holds the same microphone — it has to go as well.
+  if (hubDesired) await stopHub();
+}
+
+// Full "stop listening" across the browser.
+async function stopEverything(alsoTabId) {
+  var ids = [];
+  var known = await getActiveTab();
+  if (known !== -1) ids.push(known);
+  if (alsoTabId != null && ids.indexOf(alsoTabId) < 0) ids.push(alsoTabId);
+  for (var i = 0; i < ids.length; i++) {
+    try { await chrome.tabs.sendMessage(ids[i], { cmd: 'VS_STOP' }); } catch (e) {}
+    updateBadge(ids[i], false);
+  }
+  try { await chrome.storage.session.set({ vsActiveTab: -1 }); } catch (e) {}
+  await stopHub();
 }
 
 /* ================= voice hub (PDF & non-scriptable mode) ================= */
@@ -221,14 +263,20 @@ function sendHubStatus() {
 }
 
 /* ================= trusted input engine (debugger) ================= */
-var dbgTabs = {}; // tabId -> true while attached
+var dbgTabs = {};      // tabId -> true while attached
+var dbgViewport = {};  // tabId -> { w, h } (cached, avoids a round trip per wheel)
+var dbgErrors = {};    // tabId -> why the attach failed (shown in the popup)
 
 chrome.debugger.onDetach.addListener(function (src) {
-  if (src && src.tabId != null) delete dbgTabs[src.tabId];
+  if (src && src.tabId != null) {
+    delete dbgTabs[src.tabId];
+    delete dbgViewport[src.tabId];
+  }
 });
 
 chrome.tabs.onRemoved.addListener(function (tabId) {
   if (dbgTabs[tabId]) delete dbgTabs[tabId];
+  delete dbgViewport[tabId];
   if (pdfAuto[tabId]) delete pdfAuto[tabId];
   untrackPdfTab(tabId, false);
 });
@@ -249,6 +297,24 @@ async function untrackPdfTab(tabId, clearBadge) {
 }
 
 chrome.tabs.onUpdated.addListener(function (tabId, changeInfo) {
+  if (changeInfo && changeInfo.url) {
+    // Navigation invalidates the cached viewport of that tab.
+    delete dbgViewport[tabId];
+  }
+  if (changeInfo && changeInfo.status === 'loading') {
+    // A navigation tears the page engine down. The ON badge must not survive
+    // it — otherwise the toolbar keeps claiming the extension is listening.
+    // PDF tabs are excluded: there the voice hub keeps the session alive.
+    try {
+      chrome.storage.session.get({ vsHubPdfTabs: [] }, function (it) {
+        var list = (it && it.vsHubPdfTabs) || [];
+        if (list.indexOf(tabId) < 0) {
+          updateBadge(tabId, false);
+          clearActiveTab(tabId);
+        }
+      });
+    } catch (e) {}
+  }
   if (!changeInfo || !changeInfo.url || tabMode(changeInfo.url) === 'pdf') return;
   if (pdfAuto[tabId]) delete pdfAuto[tabId];
   untrackPdfTab(tabId, true);
@@ -259,9 +325,13 @@ async function dbgAttach(tabId) {
   try {
     await chrome.debugger.attach({ tabId: tabId }, '1.3');
     dbgTabs[tabId] = true;
+    delete dbgErrors[tabId];
     return true;
   } catch (e) {
     dbgTabs[tabId] = false;
+    // Keep the reason: "Another debugger is already attached" (DevTools is
+    // open) needs a very different hint than a missing API.
+    dbgErrors[tabId] = String((e && e.message) || e);
     return false;
   }
 }
@@ -269,6 +339,7 @@ async function dbgAttach(tabId) {
 async function dbgDetach(tabId) {
   try { await chrome.debugger.detach({ tabId: tabId }); } catch (e) {}
   delete dbgTabs[tabId];
+  delete dbgViewport[tabId];
 }
 
 async function detachAllDebuggers() {
@@ -298,22 +369,12 @@ function dbgSend(tabId, method, params) {
 // lives behind a shadow-root embed / internal extension frame).
 async function pdfWheel(tabId, deltaY) {
   var attached = await dbgAttach(tabId);
-  if (!attached) return { ok: false, reason: 'debugger-unavailable' };
-  var viewport = await dbgSend(tabId, 'Runtime.evaluate', {
-    expression: '(function(){return {w:(window.innerWidth||300),h:(window.innerHeight||200)}})()',
-    returnByValue: true
-  });
-  var w = 300, h = 200;
-  if (viewport && viewport.ok && viewport.value && viewport.value.result) {
-    try {
-      w = Number(viewport.value.result.value.w) || 300;
-      h = Number(viewport.value.result.value.h) || 200;
-    } catch (e) {}
-  }
+  if (!attached) return { ok: false, reason: dbgErrors[tabId] || 'debugger-unavailable' };
+  var vp = await pdfViewport(tabId);
   var r = await dbgSend(tabId, 'Input.dispatchMouseEvent', {
     type: 'mouseWheel',
-    x: Math.max(2, Math.round(w / 2)),
-    y: Math.max(2, Math.round(h / 2)),
+    x: Math.max(2, Math.round(vp.w / 2)),
+    y: Math.max(2, Math.round(vp.h / 2)),
     deltaX: 0,
     deltaY: deltaY,
     modifiers: 0
@@ -321,10 +382,31 @@ async function pdfWheel(tabId, deltaY) {
   return { ok: !!r.ok, reason: r.ok ? '' : (r.error || 'wheel-failed') };
 }
 
+// Viewport size of the attached tab. Cached per tab because the auto-scroll
+// loop asks for it on every tick — a debugger round trip per wheel event is
+// expensive and visibly lags the glide.
+async function pdfViewport(tabId) {
+  var cached = dbgViewport[tabId];
+  if (cached && cached.w > 0 && cached.h > 0) return cached;
+  var w = 300, h = 200;
+  try {
+    var viewport = await dbgSend(tabId, 'Runtime.evaluate', {
+      expression: '(function(){return {w:(window.innerWidth||300),h:(window.innerHeight||200)}})()',
+      returnByValue: true
+    });
+    if (viewport && viewport.ok && viewport.value && viewport.value.result) {
+      w = Number(viewport.value.result.value.w) || 300;
+      h = Number(viewport.value.result.value.h) || 200;
+    }
+  } catch (e) {}
+  dbgViewport[tabId] = { w: w, h: h };
+  return dbgViewport[tabId];
+}
+
 // Trusted Home/End keys for "top"/"bottom" jumps into the PDF plugin.
 async function pdfKey(tabId, key) {
   var attached = await dbgAttach(tabId);
-  if (!attached) return { ok: false, reason: 'debugger-unavailable' };
+  if (!attached) return { ok: false, reason: dbgErrors[tabId] || 'debugger-unavailable' };
   var isHome = key === 'Home';
   var code = isHome ? 36 : 35;
   var down = await dbgSend(tabId, 'Input.dispatchKeyEvent', {
@@ -344,7 +426,7 @@ async function pdfKey(tabId, key) {
 // the debugger; guards against edge cases (other internal extension pages).
 async function pdfVerify(tabId) {
   var attached = await dbgAttach(tabId);
-  if (!attached) return { ok: false, reason: 'debugger-unavailable' };
+  if (!attached) return { ok: false, reason: dbgErrors[tabId] || 'debugger-unavailable' };
   var r = await dbgSend(tabId, 'Runtime.evaluate', {
     expression: '(function(){try{var p=(document.querySelector("embed#plugin")||document.querySelector("embed[type*=pdf]"));return !!(p||document.contentType.indexOf("pdf")>=0||/\\.pdf([?#]|$)/i.test(document.location.search))}catch(e){return false}})()',
     returnByValue: true
@@ -354,10 +436,11 @@ async function pdfVerify(tabId) {
 }
 
 /* ================= shared toggle ================= */
-var pdfAuto = {}; // tabId -> dir while auto-scrolling a PDF via debugger
+var pdfAuto = {};    // tabId -> dir while auto-scrolling a PDF via debugger
+var lastDelta = {};  // tabId -> last wheel amount (for the "undo" command)
 var cachedSpeed = 40;
 try {
-  chrome.storage.sync.get({ speed: 40 }, function (it) { cachedSpeed = clampSpeed(it && it.speed); });
+  VSCore.storageGet({ speed: 40 }, function (it) { cachedSpeed = clampSpeed(it && it.speed); });
   chrome.storage.onChanged.addListener(function (changes) {
     if (changes.speed) cachedSpeed = clampSpeed(changes.speed.newValue);
   });
@@ -414,11 +497,11 @@ async function routeHubCommand(msg) {
       return;
     }
     if (name === 'faster') {
-      try { chrome.storage.sync.set({ speed: clampSpeed(cachedSpeed + 12) }); } catch (e) {}
+      try { VSCore.storageSet({ speed: clampSpeed(cachedSpeed + 12) }); } catch (e) {}
       return;
     }
     if (name === 'slower') {
-      try { chrome.storage.sync.set({ speed: clampSpeed(cachedSpeed - 12) }); } catch (e) {}
+      try { VSCore.storageSet({ speed: clampSpeed(cachedSpeed - 12) }); } catch (e) {}
       return;
     }
     if (name === 'sleep' || name === 'wake') return;
@@ -432,18 +515,31 @@ async function routeHubCommand(msg) {
     if (name === 'top' || (mult === 0 && upward)) { await pdfKey(tab.id, 'Home'); return; }
     if (name === 'bot' || (mult === 0 && !upward && (name === 'dn' || name === 'pd'))) { await pdfKey(tab.id, 'End'); return; }
 
+    // "undo" takes back the last step (the PDF path has no page engine, so
+    // the amount is tracked here).
+    if (name === 'undo') {
+      var back = lastDelta[tab.id] || 0;
+      if (!back) return;
+      await pdfWheel(tab.id, -back);
+      lastDelta[tab.id] = -back;
+      return;
+    }
+
     var dist = 400;
-    try { var cfgs = await chrome.storage.sync.get({ dist: 400 }); dist = clampNumBg(cfgs.dist, 400); } catch (e) {}
+    try { var cfgs = await new Promise(function (r) { VSCore.storageGet({ dist: 400 }, r); }); dist = clampNumBg(cfgs && cfgs.dist, 400); } catch (e) {}
 
     var d = 0;
     if (name === 'pd' || name === 'pu' || page) {
-      var vh = await dbgSend(tab.id, 'Runtime.evaluate', { expression: 'String(window.innerHeight||0)', returnByValue: true });
-      var pageH = (vh && vh.ok && vh.value && vh.value.result ? parseInt(vh.value.result.value, 10) : 0) || 600;
+      var vp = await pdfViewport(tab.id);
+      var pageH = vp.h || 600;
       d = (upward ? -1 : 1) * Math.round(0.9 * pageH * (mult || 1));
     } else if (name === 'dn' || name === 'up') {
       d = (name === 'dn' ? 1 : -1) * Math.round(dist * (mult || 1));
     }
-    if (d) await pdfWheel(tab.id, d);
+    if (d) {
+      await pdfWheel(tab.id, d);
+      lastDelta[tab.id] = d;
+    }
     return;
   }
 
@@ -467,7 +563,8 @@ function clampNumBg(n, lo) {
 }
 
 /* ================= master toggle (popup button / hotkey) ================= */
-// Returns { on, mode } describing what happened.
+// Returns { on, mode } describing what happened. The toggle is global: one
+// recognizer at a time, anywhere in the browser.
 async function toggleActiveTab() {
   var tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   var tab = tabs && tabs[0];
@@ -475,37 +572,41 @@ async function toggleActiveTab() {
 
   var mode = tabMode(tab.url);
 
-  // In-page engine already running? Toggle it off (web tabs only).
+  // Is anything listening right now (this tab, another tab, or the hub)?
+  var pageOn = false;
   try {
     var st = await chrome.tabs.sendMessage(tab.id, { cmd: 'VS_STATUS' });
-    if (st && st.on && mode === 'web') {
-      await chrome.tabs.sendMessage(tab.id, { cmd: 'VS_TOGGLE' });
-      updateBadge(tab.id, false);
-      return { on: false, mode: 'web', stopped: true };
-    }
+    pageOn = !!(st && st.on);
   } catch (e) {}
+  var hubIsRunning = await hubRunning();
+  var registered = await getActiveTab();
+  var listeningElsewhere = (registered !== -1 && registered !== tab.id);
+
+  if (pageOn || hubIsRunning || listeningElsewhere) {
+    // Toggle off: stop every listener (page engines + hub) and clean badges.
+    var wants = await chrome.storage.session.get({ vsHubPdfTabs: [] });
+    (wants.vsHubPdfTabs || []).forEach(function (id) { updateBadge(id, false); });
+    await chrome.storage.session.set({ vsHubPdfTabs: [] });
+    await stopEverything(tab.id);
+    return { on: false, mode: mode === 'pdf' ? 'hub' : 'web', stopped: true };
+  }
 
   if (mode === 'restricted') {
     return { on: false, mode: 'restricted', reason: 'restricted' };
   }
 
-  var hubIsRunning = await hubRunning();
-
-  if (hubIsRunning) {
-    // Hub already listening -> toggle everything off (badge cleanup for pdf tabs).
-    var wants = await chrome.storage.session.get({ vsHubPdfTabs: [] });
-    (wants.vsHubPdfTabs || []).forEach(function (id) { updateBadge(id, false); });
-    await chrome.storage.session.set({ vsHubPdfTabs: [] });
-    await stopHub();
-    return { on: false, mode: 'hub', stopped: true };
-  }
-
   if (mode === 'web') {
+    // Retire any other listener FIRST — two live recognizers would fight
+    // over the microphone.
+    await stopOtherEngines(tab.id);
     var on = await toggleInTab(tab.id);
+    if (on) await setActiveTab(tab.id);
     return { on: !!on, mode: 'web' };
   }
 
   // PDF / internal viewer tab -> hub + trusted debugger input.
+  // A page engine in another tab must release the microphone first.
+  await stopOtherEngines(null);
   var started = await startHub('');
   var probe = await pdfVerify(tab.id);
   var pdfTabs = await chrome.storage.session.get({ vsHubPdfTabs: [] });
@@ -517,7 +618,8 @@ async function toggleActiveTab() {
     on: (started !== 'none'),
     mode: 'hub',
     pdfOk: probe.ok,
-    reason: started === 'none' ? 'no-hub' : (probe.ok ? '' : probe.reason)
+    reason: started === 'none' ? 'no-hub' : (probe.ok ? '' : (probe.reason || '')),
+    dbgError: dbgErrors[tab.id] || ''
   };
 }
 
@@ -533,7 +635,12 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     (async function () {
       try {
         var r = await toggleActiveTab();
-        sendResponse({ ok: true, on: !!r.on, mode: r.mode, reason: r.reason || '' });
+        // "stopped" tells the popup that the click really turned listening
+        // off — without it a successful stop looks like a failure.
+        sendResponse({
+          ok: true, on: !!r.on, mode: r.mode, stopped: !!r.stopped,
+          reason: r.reason || '', dbgError: r.dbgError || ''
+        });
       } catch (e) {
         sendResponse({ ok: false, reason: String((e && e.message) || e) });
       }
@@ -543,6 +650,9 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
 
   if (msg.cmd === 'VS_STATE_CHANGED' && sender && sender.tab && sender.tab.id) {
     updateBadge(sender.tab.id, !!msg.on);
+    // Keep the single-listener registry in sync with the page engines.
+    if (msg.on) setActiveTab(sender.tab.id);
+    else clearActiveTab(sender.tab.id);
     return false;
   }
 
@@ -569,7 +679,10 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     hubDesired = !!msg.on;
     (async function () {
       try {
-        await chrome.storage.session.set({ vsHubOn: !!msg.on, vsHubInfo: { heard: msg.heard || '', matched: msg.matched || '', conf: msg.conf || 0, err: msg.err || '' } });
+        await chrome.storage.session.set({
+          vsHubOn: !!msg.on,
+          vsHubInfo: { heard: msg.heard || '', matched: msg.matched || '', conf: msg.conf || 0, err: msg.err || '' }
+        });
       } catch (e) {}
       if (!msg.on) {
         // Hub side stopped recognition (e.g. mic error): detach & clear badges.
@@ -632,10 +745,16 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   if (msg.cmd === 'VS_BG_HUB_STATUS') {
     (async function () {
       try {
-        var it = await chrome.storage.session.get({ vsHubOn: false, vsHubInfo: {}, vsHubPdfTabs: [] });
-        sendResponse({ on: !!it.vsHubOn, info: it.vsHubInfo, pdfTabs: it.vsHubPdfTabs, wanted: hubDesired });
+        var it = await chrome.storage.session.get({ vsHubOn: false, vsHubInfo: {}, vsHubPdfTabs: [], vsHubWanted: '' });
+        // "wanted" survives a service worker restart, "hubDesired" does not.
+        sendResponse({
+          on: !!it.vsHubOn,
+          wanted: !!(hubDesired || it.vsHubWanted === '1'),
+          info: it.vsHubInfo,
+          pdfTabs: it.vsHubPdfTabs
+        });
       } catch (e) {
-        sendResponse({ on: false, info: {}, pdfTabs: [] });
+        sendResponse({ on: false, wanted: false, info: {}, pdfTabs: [] });
       }
     })();
     return true;

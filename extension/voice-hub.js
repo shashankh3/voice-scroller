@@ -11,30 +11,12 @@
   'use strict';
   if (window.__vsHub) return;
 
-  var DEFAULTS = {
-    dist: 400,
-    smooth: true,
-    sound: true,
-    lang: 'en-US',
-    sensitivity: 'balanced',
-    speed: 40,
-    showHud: true,
-    cDn: 'down, scroll down, go down, move down',
-    cUp: 'up, scroll up, go up, move up',
-    cPd: 'page down, next page, page forward',
-    cPu: 'page up, previous page, page back',
-    cTop: 'top, go to top, scroll to top',
-    cBot: 'bottom, go to bottom, scroll to bottom',
-    cStop: 'stop, halt, freeze, stop scrolling',
-    cSleep: 'sleep, pause, pause listening',
-    cWake: 'wake up, wake, resume, start listening',
-    cFaster: 'faster, speed up, quicker, go faster',
-    cSlower: 'slower, slow down, speed down, go slower',
-    cHelp: 'help, what can i say, show commands'
-  };
+  // Settings defaults live in vs-core so every context shares one source.
+  var DEFAULTS = VSCore.DEFAULTS;
 
   var cfg = Object.assign({}, DEFAULTS);
   var matcher = null;
+  var engine = null; // shared interim/final speech engine (see vs-core)
   var rec = null;
   var active = false;
   var manualStop = false;
@@ -45,14 +27,13 @@
   var lastMatched = '';
   var restartTimer = null;
   var restartCount = 0;
+  var restartBurst = 0;          // fast failures inside the current window
+  var recStartTs = 0;            // when the running recognizer started
   var restartWindowStart = Date.now();
   var autoTimer = null;
   var autoDir = 0;
   var activeLang = '';
   var langFallbackTried = false;
-  // Zero-latency interim engine segment tracking (same shape as content.js).
-  var executedSegments = {};
-  var interimTimers = {}; // per-segment settle timers — rapid commands don't cancel each other
   var startWatchdog = null;
   var lastError = '';
   var bloqGrantTries = 0;
@@ -81,13 +62,15 @@
 
   function loadCfg(done) {
     try {
-      if (chrome && chrome.storage && chrome.storage.sync) {
-        chrome.storage.sync.get(DEFAULTS, function (items) {
-          if (items) cfg = Object.assign({}, DEFAULTS, items);
-          cfg.dist = clampNum(parseInt(cfg.dist, 10) || 400, 50, 1000);
-          cfg.speed = clampNum(parseInt(cfg.speed, 10) || 40, 1, 100);
-          build();
-          if (done) done();
+      if (chrome && chrome.storage) {
+        VSCore.storageGet(DEFAULTS, function (items) {
+          try {
+            if (items) cfg = Object.assign({}, DEFAULTS, items);
+            cfg.dist = clampNum(parseInt(cfg.dist, 10) || 400, 50, 1000);
+            cfg.speed = clampNum(parseInt(cfg.speed, 10) || 40, 1, 100);
+            build();
+            if (done) done();
+          } catch (e) { if (done) done(); }
         });
       } else { build(); if (done) done(); }
     } catch (e) { build(); if (done) done(); }
@@ -96,7 +79,9 @@
   try {
     if (chrome && chrome.storage && chrome.storage.onChanged) {
       chrome.storage.onChanged.addListener(function (changes, area) {
-        if (area !== 'sync') return;
+        // "sync" is the normal store; "local" is used when sync storage is
+        // unavailable in a managed browser.
+        if (area !== 'sync' && area !== 'local') return;
         var langChanged = false;
         for (var key in changes) {
           if (Object.prototype.hasOwnProperty.call(DEFAULTS, key)) {
@@ -138,8 +123,9 @@
     } catch (e) {}
     var partial = (typeof overrideMult === 'number' && isFinite(overrideMult));
     if (partial) { mult = overrideMult; page = !!overridePage; }
+    var p = null;
     try {
-      var p = chrome.runtime.sendMessage({
+      p = chrome.runtime.sendMessage({
         cmd: 'VS_HUB_CMD', name: name, raw: raw || '', mult: mult, page: page,
         partial: partial, dir: dir || 0, tick: !!tick
       });
@@ -147,28 +133,39 @@
     } catch (e) {}
     lastCmdTime = now;
     lastMatched = name;
+    return p;
   }
 
   /* ================= precision scroller (PDF target) ================= */
-  // The hub keeps its own 45 ms tick loop so PDF tabs (which have no content
-  // script) still get continuous auto-scroll. For scriptable tabs the loop is
-  // harmless: background ignores duplicate 'auto' ticks once content.js owns
-  // its internal timer.
+  // The hub keeps its own tick loop so PDF tabs (which have no content
+  // script) still get continuous auto-scroll. The next tick is scheduled
+  // only after the previous one was answered, so a slow background can never
+  // pile up a backlog of wheel events.
   function startAuto(dir) {
     stopAuto(true);
     autoDir = dir;
     exec('auto', 'keep scrolling', dir, false);
-    autoTimer = setInterval(function () {
-      exec('auto', 'keep scrolling', autoDir, true);
-    }, 45);
+    var tick = function () {
+      if (!autoTimer) return;
+      var p;
+      try { p = exec('auto', 'keep scrolling', autoDir, true); }
+      catch (e) { p = null; }
+      var again = function () {
+        if (!autoTimer) return;
+        try { autoTimer = setTimeout(tick, 45); } catch (e) { autoTimer = null; }
+      };
+      if (p && typeof p.then === 'function') p.then(again, again);
+      else again();
+    };
+    autoTimer = setTimeout(tick, 45);
   }
 
   function stopAuto() {
     if (autoTimer) {
-      clearInterval(autoTimer);
+      try { clearTimeout(autoTimer); } catch (e) {}
       autoTimer = null;
-      autoDir = 0;
     }
+    autoDir = 0;
   }
 
   /* ================= command handling (mirrors content.js) ================= */
@@ -211,12 +208,15 @@
       return;
     }
     if (cmd === 'help') {
-      exec(cmd, raw, 0, false); // web tabs show the on-page cheat sheet
-      setStatus('Say: down · up · page down · top', 'bottom · stop · sleep/wake · faster/slower · हिन्दी: नीचे · ऊपर · रुको · जागो · मदद');
+      exec(cmd, raw, 0, false); // web tabs show the on-page command grid
+      setStatus('Say: down · up · page down · top', 'bottom · undo · stop · sleep/wake · faster/slower · हिन्दी: नीचे · ऊपर · रुको · जागो · मदद');
       return;
     }
     if (cmd === 'faster' || cmd === 'slower') {
       exec(cmd, raw, 0, false);
+      // Same rule as the page engine: a tempo command also starts the glide,
+      // so "faster" alone is enough to begin scrolling.
+      if (!autoTimer) startAuto(1);
       var disp = Math.max(1, Math.min(100, (parseInt(cfg.speed, 10) || 40) + (cmd === 'faster' ? 12 : -12)));
       setStatus(autoTimer ? ('Auto-scroll ' + (autoDir > 0 ? 'down' : 'up')) : (cmd === 'faster' ? 'Faster' : 'Slower'),
         'speed ' + disp + '%');
@@ -232,112 +232,53 @@
     // cancels auto-scroll first (PDF ticks keep firing until stopped).
     stopAuto();
     exec(cmd, raw, 0, false);
-    var labels = { dn: 'Down', up: 'Up', pd: 'Page down', pu: 'Page up', top: 'Top', bot: 'Bottom' };
+    var labels = { dn: 'Down', up: 'Up', pd: 'Page down', pu: 'Page up', top: 'Top', bot: 'Bottom', undo: 'Undone' };
     setStatus(labels[cmd] || 'Command', 'speed ' + (parseInt(cfg.speed, 10) || 40) + '%');
   }
 
   // Zero-latency processor (segment dedup + interim settling debounce),
-  // trimmed on-page edition of content.js.handleSpeechCandidates.
+  // shared with content.js through vs-core so a command behaves identically
+  // on web pages and on native PDFs.
+  function buildEngine() {
+    try {
+      engine = VSCore.createEngine({
+        match: function (text) {
+          return matcher ? matcher.parseCommand(text) : null;
+        },
+        mod: function (text, cmd) {
+          return matcher ? matcher.parseModifier(text, cmd) : { mult: 1, edge: null, page: false };
+        },
+        settleMs: 60,
+        maxWaitMs: 120,
+        onExec: execAction,
+        onMiss: function (text, conf) {
+          lastHeard = text || '';
+          lastConfidence = conf || 0;
+          lastMatched = '';
+          if (!sleeping) setStatus('Heard: ' + String(lastHeard).slice(0, 40), 'no command — try "down"');
+          else setStatus('Heard: ' + String(lastHeard).slice(0, 40), 'paused — say "wake up"');
+        }
+      });
+    } catch (e) { engine = null; }
+  }
+
+  function execAction(a) {
+    if (!a) return;
+    lastHeard = a.text || lastHeard;
+    lastConfidence = a.conf || 0;
+    if (a.type === 'upgrade') {
+      // "down" -> "down three": only the remaining steps are executed.
+      if (a.edge) exec(a.edge === 'bot' ? 'bot' : 'top', a.text, 0, false);
+      else exec(a.cmd, a.text, 0, false, a.delta, a.page);
+      return;
+    }
+    handleCommand(a.cmd, a.text);
+  }
+
   function handleSpeechCandidates(cands, isFinal, segmentIdx) {
-    var prev = executedSegments[segmentIdx];
-
-    var best = null;
-    for (var i = 0; i < cands.length; i++) {
-      var hit = matcher && matcher.parseCommand(cands[i].text);
-      if (hit) {
-        var s = hit.score * 10 - i * 2;
-        if (!best || s > best.s) {
-          best = { hit: hit, s: s, text: cands[i].text, conf: cands[i].conf };
-        }
-      }
-    }
-
-    if (best) {
-      if (prev && prev.done) {
-        if (best.hit.cmd === prev.cmd && best.hit.cmd !== 'stop' &&
-            best.hit.cmd !== 'sleep' && best.hit.cmd !== 'wake' &&
-            best.hit.cmd !== 'faster' && best.hit.cmd !== 'slower') {
-          var nm = matcher.parseModifier(best.text, best.hit.cmd);
-          var om = prev.mod || { mult: 1, edge: null };
-          var upgraded = false;
-          if (nm.edge && nm.edge !== om.edge) upgraded = true;
-          else if (!nm.edge && !om.edge && (nm.mult || 1) > (om.mult || 1)) upgraded = true;
-          if (upgraded) {
-            lastHeard = best.text; lastConfidence = best.conf || 0; lastCmdTime = Date.now();
-            prev.mod = nm; prev.text = best.text; prev.score = best.hit.score;
-            if (nm.edge) exec(nm.edge === 'bot' ? 'bot' : 'top', best.text, 0, false);
-            else exec(best.hit.cmd, best.text, 0, false, (nm.mult || 1) - (om.mult || 1), nm.page);
-            lastMatched = best.hit.cmd + '|';
-            return;
-          }
-        }
-        if (isFinal) prev.final = true;
-        return; // genuine duplicate interim/final overlap — suppress double-fire
-      }
-
-      var cmd = best.hit.cmd;
-      lastHeard = best.text;
-      lastConfidence = best.conf || 0;
-      lastMatched = cmd + '|';
-
-      // Immediate commands execute with 0 ms delay
-      if (cmd === 'stop' || cmd === 'sleep' || (cmd === 'wake' && sleeping)) {
-        clearTimeout(interimTimers[segmentIdx]);
-        delete interimTimers[segmentIdx];
-        executedSegments[segmentIdx] = { t: Date.now(), cmd: cmd, done: true, final: true, mod: matcher.parseModifier(best.text, cmd), text: best.text };
-        handleCommand(cmd, best.text);
-        return;
-      }
-      // Final -> execute immediately
-      if (isFinal) {
-        clearTimeout(interimTimers[segmentIdx]);
-        delete interimTimers[segmentIdx];
-        executedSegments[segmentIdx] = { t: Date.now(), cmd: cmd, done: true, final: true, mod: matcher.parseModifier(best.text, cmd), text: best.text };
-        handleCommand(cmd, best.text);
-        return;
-      }
-      // Interim: brief 210 ms settling window lets multi-word modifiers complete
-      clearTimeout(interimTimers[segmentIdx]);
-      (function (seg, b) {
-        interimTimers[seg] = setTimeout(function () {
-          delete interimTimers[seg];
-          var p = executedSegments[seg];
-          if (p && p.done) return;
-          executedSegments[seg] = { t: Date.now(), cmd: b.hit.cmd, done: true, final: false, mod: matcher.parseModifier(b.text, b.hit.cmd), text: b.text };
-          handleCommand(b.hit.cmd, b.text);
-        }, 210);
-      })(segmentIdx, best);
-    } else if (isFinal) {
-      lastHeard = cands.length ? cands[0].text : '';
-      lastConfidence = cands.length ? (cands[0].conf || 0) : 0;
-      lastMatched = '';
-      if (!sleeping) setStatus('Heard: ' + String(lastHeard).slice(0, 40), 'no command — try "down"');
-      else setStatus('Heard: ' + String(lastHeard).slice(0, 40), 'paused — say "wake up"');
-    }
-  }
-
-  function pruneSegments() {
-    try {
-      var keys = Object.keys(executedSegments);
-      if (keys.length <= 60) return;
-      var now = Date.now();
-      for (var i = 0; i < keys.length; i++) {
-        var en = executedSegments[keys[i]];
-        if (en && (now - en.t) > 120000) delete executedSegments[keys[i]];
-      }
-      var rest = Object.keys(executedSegments);
-      if (rest.length > 60) {
-        rest.sort(function (a, b) { return executedSegments[a].t - executedSegments[b].t; });
-        for (var j = 0; j < rest.length - 60; j++) delete executedSegments[rest[j]];
-      }
-    } catch (e) {}
-  }
-
-  function clearInterimTimers() {
-    try {
-      for (var k in interimTimers) clearTimeout(interimTimers[k]);
-    } catch (e) {}
-    interimTimers = {};
+    if (!engine) buildEngine();
+    if (!engine) return;
+    engine.handle(cands || [], !!isFinal, segmentIdx);
   }
 
   /* ================= speech engine ================= */
@@ -358,8 +299,10 @@
     manualStop = false;
     sleeping = false;
     restartCount = 0;
+    restartBurst = 0;
     restartWindowStart = Date.now();
-    executedSegments = {};
+    if (!engine) buildEngine();
+    if (engine) engine.reset();
     lastError = '';
     if (!activeLang) activeLang = cfg.lang || 'en-US';
     createAndStart(true);
@@ -367,28 +310,39 @@
 
   function createAndStart(firstRun) {
     var SR = speechCtor();
-    if (!SR) { active = false; return; }
-    try { if (rec) { try { rec.abort(); } catch (e) {} rec = null; } } catch (e) {}
+    if (!SR) { active = false; lastError = 'speech-api-missing'; return; }
+    // Invalidate the previous instance BEFORE aborting it: aborting a live
+    // recognizer makes the browser fire one more "end" event, and handling
+    // that event would schedule another restart — an endless restart loop in
+    // which the hub listens but never understands a command.
+    var old = rec;
+    rec = null;
+    if (old) { try { old.abort(); } catch (e) {} }
     // A fresh recognizer restarts result indices at 0; stale dedup entries from
     // the previous instance would suppress new commands, so drop them.
-    clearInterimTimers();
-    executedSegments = {};
+    if (!engine) buildEngine();
+    if (engine) engine.reset();
 
-    rec = new SR();
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.lang = activeLang || cfg.lang || 'en-US';
-    try { rec.maxAlternatives = 3; } catch (e) { try { rec.maxAlternatives = 1; } catch (e2) {} }
+    var myRec = new SR();
+    rec = myRec;
+    myRec.continuous = true;
+    myRec.interimResults = true;
+    myRec.lang = activeLang || cfg.lang || 'en-US';
+    try { myRec.maxAlternatives = 3; } catch (e) { try { myRec.maxAlternatives = 1; } catch (e2) {} }
 
-    rec.onstart = function () {
+    myRec.onstart = function () {
+      if (rec !== myRec) return; // stale instance — a newer one took over
       clearTimeout(startWatchdog);
       active = true;
       restartCount = 0;
+      recStartTs = Date.now();
+      lastError = '';
       reportState(true);
       if (firstRun) setStatus('Listening', 'say "down" · "up" · "page down"');
     };
 
-    rec.onresult = function (e) {
+    myRec.onresult = function (e) {
+      if (rec !== myRec) return; // stale instance
       try {
         var interim = '';
         for (var i = e.resultIndex; i < e.results.length; i++) {
@@ -399,7 +353,6 @@
             if (r[a] && r[a].transcript) cands.push({ text: r[a].transcript, conf: r[a].confidence || 0 });
           }
           if (!cands.length) continue;
-          pruneSegments();
           handleSpeechCandidates(cands, r.isFinal, i);
           if (!r.isFinal) interim = cands[0].text;
         }
@@ -410,7 +363,8 @@
       } catch (err) {}
     };
 
-    rec.onerror = function (e) {
+    myRec.onerror = function (e) {
+      if (rec !== myRec) return; // stale instance
       var err = (e && e.error) || '';
       if (err === 'not-allowed' || err === 'service-not-allowed') {
         active = false;
@@ -465,12 +419,30 @@
       }
     };
 
-    rec.onend = function () {
+    myRec.onend = function () {
+      if (rec !== myRec) return; // stale instance — must not restart anything
       if (!active || manualStop) return;
       var now = Date.now();
+      // A session that lived a normal amount of time simply ended (silence
+      // timeout); only a session that died immediately counts as a failure.
+      var lived = recStartTs ? (now - recStartTs) : 99999;
+      if (lived < 1500) restartBurst++; else restartBurst = 0;
+      if (restartBurst > 6) {
+        // The speech service keeps dropping the session: stop cleanly instead
+        // of restarting forever.
+        active = false;
+        manualStop = true;
+        lastError = 'unstable';
+        reportState(false);
+        setStatus('Speech service unstable', 'the browser keeps dropping recognition — retry', true);
+        try { if (rec) rec.abort(); } catch (ee) {}
+        return;
+      }
       if (now - restartWindowStart > 10000) { restartWindowStart = now; restartCount = 0; }
       restartCount++;
-      var delay = Math.min(250 * restartCount, 2200);
+      // Restart quickly: every millisecond of silence is a millisecond in
+      // which a spoken command cannot be heard.
+      var delay = Math.min(150 * restartCount, 2200);
       clearTimeout(restartTimer);
       restartTimer = setTimeout(function () {
         if (active && !manualStop) createAndStart(false);
@@ -487,7 +459,7 @@
     }
 
     try {
-      rec.start();
+      myRec.start();
     } catch (e) {
       active = false;
       lastError = 'start-failed';
@@ -504,11 +476,13 @@
     sleeping = false;
     stopAuto();
     clearTimeout(restartTimer);
-    clearInterimTimers();
+    if (engine) engine.reset();
     clearTimeout(startWatchdog);
-    try { if (rec) rec.abort(); } catch (e) {}
-    rec = null;
+    var oldRec = rec;
+    rec = null;               // invalidate before aborting: no restart may follow
+    if (oldRec) { try { oldRec.abort(); } catch (e) {} }
     lastConfidence = 0;
+    lastError = ''; // a deliberate stop is not an error
     reportState(false);
     setStatus('VoiceScroll hub stopped', 'press Enable in the toolbar popup');
   }
@@ -557,12 +531,14 @@
     }
   } catch (e) {}
 
+  // Restart the recognizer (language change, service fallback). The old
+  // instance is invalidated inside createAndStart, so its "end" event can
+  // never schedule another restart.
   function restartRecognizer(delay) {
     if (!active) return;
     clearTimeout(restartTimer);
     restartTimer = setTimeout(function () {
       if (!active) return;
-      try { if (rec) rec.abort(); } catch (e) {}
       createAndStart(false);
     }, delay || 300);
   }
