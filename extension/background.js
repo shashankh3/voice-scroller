@@ -277,6 +277,7 @@ chrome.debugger.onDetach.addListener(function (src) {
 chrome.tabs.onRemoved.addListener(function (tabId) {
   if (dbgTabs[tabId]) delete dbgTabs[tabId];
   delete dbgViewport[tabId];
+  delete lastDelta[tabId];
   if (pdfAuto[tabId]) delete pdfAuto[tabId];
   untrackPdfTab(tabId, false);
 });
@@ -328,7 +329,7 @@ async function dbgAttach(tabId) {
     delete dbgErrors[tabId];
     return true;
   } catch (e) {
-    dbgTabs[tabId] = false;
+    delete dbgTabs[tabId];
     // Keep the reason: "Another debugger is already attached" (DevTools is
     // open) needs a very different hint than a missing API.
     dbgErrors[tabId] = String((e && e.message) || e);
@@ -414,12 +415,12 @@ async function pdfKey(tabId, key) {
     key: key, code: key,
     windowsVirtualKeyCode: code, nativeVirtualKeyCode: code
   });
-  await dbgSend(tabId, 'Input.dispatchKeyEvent', {
+  var up = await dbgSend(tabId, 'Input.dispatchKeyEvent', {
     type: 'keyUp',
     key: key, code: key,
     windowsVirtualKeyCode: code, nativeVirtualKeyCode: code
   });
-  return { ok: !!down.ok, reason: down.ok ? '' : (down.error || 'key-failed') };
+  return { ok: !!(down.ok && up.ok), reason: down.ok && up.ok ? '' : (down.error || up.error || 'key-failed') };
 }
 
 // Does the attached tab actually show the internal PDF viewer? Cheap probe via

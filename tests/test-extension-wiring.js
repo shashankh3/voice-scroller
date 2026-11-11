@@ -42,9 +42,15 @@ function ok(value, label) {
   let response = null;
   const ret = listener({ cmd: 'VS_BG_TOGGLE' }, { id: 'bg' }, (r) => { response = r; });
   eq(ret, true, 'the toggle listener answers asynchronously');
+
+  let pdfKeyResp = null;
+  const retKey = listener({ cmd: 'VS_PDFFB', kind: 'key', key: 'Home' }, { tab: { id: 42 } }, (r) => { pdfKeyResp = r; });
+  eq(retKey, true, 'VS_PDFFB with key answers asynchronously');
+
   setTimeout(function () {
     ok(response && typeof response.ok === 'boolean', 'the toggle returns a result object');
     ok(calls.sendMessage.length >= 0, 'the background talks to the runtime');
+    ok(pdfKeyResp && pdfKeyResp.ok === true, 'VS_PDFFB key dispatch succeeded');
   }, 30);
 }
 

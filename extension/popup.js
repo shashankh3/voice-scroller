@@ -15,6 +15,7 @@ var DEFAULTS = (typeof VSCore !== 'undefined' && VSCore.DEFAULTS) ? VSCore.DEFAU
   cWake: 'wake up, wake, resume, start listening',
   cFaster: 'faster, speed up, quicker, go faster',
   cSlower: 'slower, slow down, speed down, go slower',
+  cUndo: 'undo, undo that, take it back, back up',
   cHelp: 'help, what can i say, show commands'
 };
 
